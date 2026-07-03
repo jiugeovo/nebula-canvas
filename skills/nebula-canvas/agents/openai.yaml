@@ -1,0 +1,6 @@
+interface:
+  display_name: "NebulaCanvas"
+  short_description: "Generate APINebula images through async CLI/MCP workflows."
+  default_prompt: "Use $nebula-canvas to generate an APINebula image from my prompt."
+policy:
+  allow_implicit_invocation: true

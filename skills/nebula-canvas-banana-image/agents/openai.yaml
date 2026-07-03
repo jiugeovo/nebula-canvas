@@ -1,7 +1,0 @@
-interface:
-  display_name: "NebulaCanvas Banana Image"
-  short_description: "Generate Nano Banana images through APINebula async tasks."
-  default_prompt: "Use $nebula-canvas-banana-image to generate a Nano Banana image from my prompt."
-policy:
-  allow_implicit_invocation: true
-

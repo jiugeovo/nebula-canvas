@@ -1,7 +1,0 @@
-interface:
-  display_name: "NebulaCanvas Adobe Image"
-  short_description: "Generate Adobe GPT Image 2 images through APINebula async tasks."
-  default_prompt: "Use $nebula-canvas-adobe-image to generate a polished Adobe GPT Image 2 image from my prompt."
-policy:
-  allow_implicit_invocation: true
-
