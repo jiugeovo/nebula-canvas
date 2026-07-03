@@ -1,0 +1,14 @@
+﻿{
+  "mcpServers": {
+    "nebula-canvas": {
+      "command": "node",
+      "args": ["E:/codex/nebula-canvas/bin/nebula-canvas-mcp.js"],
+      "env": {
+        "APINEBULA_API_KEY": "your_api_key_here",
+        "APINEBULA_BASE_URL": "https://apinebula.com",
+        "NEBULA_CANVAS_OUTPUT_DIR": "E:/codex/nebula-canvas/outputs"
+      }
+    }
+  }
+}
+

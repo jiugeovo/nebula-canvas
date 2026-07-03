@@ -1,0 +1,37 @@
+﻿{
+  "name": "nebula-canvas",
+  "version": "0.1.0",
+  "description": "APINebula async image generation tools and Codex skills.",
+  "type": "module",
+  "bin": {
+    "nebula-canvas": "./bin/nebula-canvas.js"
+  },
+  "scripts": {
+    "check": "node scripts/check.mjs",
+    "mcp": "node bin/nebula-canvas-mcp.js"
+  },
+  "keywords": [
+    "apinebula",
+    "codex",
+    "mcp",
+    "image-generation"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.20.2",
+    "dotenv": "^17.2.3",
+    "zod": "^3.25.76"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "files": [
+    "bin",
+    "src",
+    "skills",
+    "examples",
+    "README.md",
+    "LICENSE"
+  ]
+}
+

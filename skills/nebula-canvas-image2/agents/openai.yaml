@@ -1,0 +1,7 @@
+interface:
+  display_name: "NebulaCanvas Image2"
+  short_description: "Generate Image2 images through APINebula async tasks."
+  default_prompt: "Use $nebula-canvas-image2 to generate an Image2 image from my prompt."
+policy:
+  allow_implicit_invocation: true
+

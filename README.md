@@ -1,0 +1,215 @@
+# NebulaCanvas
+
+NebulaCanvas 是一个给 Codex 使用的 APINebula 异步生图工具包。它把“提交图片任务、轮询结果、下载图片、保存元数据”封装成 CLI / MCP 工具，再配套三个轻量 Codex Skill。
+
+## 功能
+
+- CLI：本地命令行调用 APINebula 异步生图接口。
+- MCP：让 Codex 通过工具调用 NebulaCanvas。
+- Skill：让 Codex 知道不同模型应该使用哪个预设和分组。
+
+当前包含三个 Skill：
+
+- `nebula-canvas-adobe-image`：`adobe-gpt-image-2`
+- `nebula-canvas-banana-image`：`adobe-nano-banana` / `adobe-nano-banana-pro` / `adobe-nano-banana-2`
+- `nebula-canvas-image2`：`gpt-image-2`
+
+项目不会把真实 API Key 写入代码。请使用本地 `.env` 或 MCP 配置传入。
+
+## 安装
+
+需要 Node.js 20 或更高版本。
+
+```powershell
+cd E:\codex\nebula-canvas
+npm install
+```
+
+如果 npm 全局缓存目录权限异常，可以使用本项目内缓存：
+
+```powershell
+npm install --cache .\.npm-cache
+```
+
+复制配置文件：
+
+```powershell
+Copy-Item .env.example .env
+```
+
+编辑 `.env`：
+
+```env
+APINEBULA_API_KEY=你的_APINebula_令牌
+APINEBULA_BASE_URL=https://apinebula.com
+NEBULA_CANVAS_OUTPUT_DIR=./outputs
+NEBULA_CANVAS_POLL_INTERVAL_MS=5000
+NEBULA_CANVAS_TIMEOUT_MS=600000
+```
+
+## CLI 使用
+
+进入项目目录：
+
+```powershell
+cd E:\codex\nebula-canvas
+```
+
+查看预设：
+
+```powershell
+node bin\nebula-canvas.js models
+```
+
+调用 Adobe GPT Image 2：
+
+```powershell
+node bin\nebula-canvas.js image generate `
+  --preset adobe `
+  --prompt "一张电影感雨夜未来城市街景，霓虹反射，真实摄影质感" `
+  --size 1024x1024 `
+  --resolution 1K `
+  --aspect-ratio 1:1
+```
+
+调用 Nano Banana：
+
+```powershell
+node bin\nebula-canvas.js image generate `
+  --preset banana `
+  --model adobe-nano-banana `
+  --prompt "一张高级感产品海报，浅灰背景，柔和布光，干净构图，无水印" `
+  --size 1024x1024
+```
+
+调用 Image2：
+
+```powershell
+node bin\nebula-canvas.js image generate `
+  --preset image2 `
+  --prompt "一张简洁的商业产品图，浅灰背景，真实摄影质感，无水印" `
+  --size 1024x1024
+```
+
+生成完成后，图片和任务元数据会保存到 `outputs/`。命令会输出：
+
+- `taskId`
+- 任务状态
+- 图片 URL
+- 下载后的本地文件路径
+- 元数据 JSON 路径
+
+## 分组说明
+
+创建 APINebula 令牌时，请选择对应分组：
+
+| 模型 | 令牌分组 |
+| --- | --- |
+| `adobe-gpt-image-2` | `adobe` |
+| `adobe-nano-banana` | `adobe` |
+| `adobe-nano-banana-pro` | `adobe` |
+| `adobe-nano-banana-2` | `adobe` |
+| `gpt-image-2` | `gpt-image-2-1k` |
+
+如果令牌分组不匹配，后端可能返回“当前分组下模型无可用渠道”。
+
+## 在 Codex 中使用 Skill
+
+把三个 Skill 复制到 Codex 的 skills 目录：
+
+```powershell
+Copy-Item -Recurse E:\codex\nebula-canvas\skills\nebula-canvas-adobe-image "$env:USERPROFILE\.codex\skills\"
+Copy-Item -Recurse E:\codex\nebula-canvas\skills\nebula-canvas-banana-image "$env:USERPROFILE\.codex\skills\"
+Copy-Item -Recurse E:\codex\nebula-canvas\skills\nebula-canvas-image2 "$env:USERPROFILE\.codex\skills\"
+```
+
+重启 Codex 后，可以这样说：
+
+```text
+用 $nebula-canvas-adobe-image，并调用 E:\codex\nebula-canvas 里的 NebulaCanvas CLI 帮我生成一张电影感未来城市图。
+```
+
+或：
+
+```text
+用 $nebula-canvas-banana-image 生成一张高级感香水产品海报。
+```
+
+Skill 负责告诉 Codex 如何选择模型和参数，真正请求接口的是 NebulaCanvas CLI / MCP。
+
+## MCP 使用
+
+启动 MCP server：
+
+```powershell
+npm run mcp
+```
+
+Codex MCP 配置示例：
+
+```json
+{
+  "mcpServers": {
+    "nebula-canvas": {
+      "command": "node",
+      "args": ["E:/codex/nebula-canvas/bin/nebula-canvas-mcp.js"],
+      "env": {
+        "APINEBULA_API_KEY": "你的_APINebula_令牌",
+        "APINEBULA_BASE_URL": "https://apinebula.com",
+        "NEBULA_CANVAS_OUTPUT_DIR": "E:/codex/nebula-canvas/outputs"
+      }
+    }
+  }
+}
+```
+
+MCP 暴露两个工具：
+
+- `nebula_canvas_generate_image`
+- `nebula_canvas_get_task`
+
+## 本地验证
+
+```powershell
+npm run check
+node bin\nebula-canvas.js models
+```
+
+真实请求烟测：
+
+```powershell
+node bin\nebula-canvas.js image generate `
+  --preset adobe `
+  --prompt "一张简洁测试图，白色桌面上放着写有 NebulaCanvas 字样的小卡片，柔和自然光" `
+  --size 1024x1024 `
+  --resolution 1K `
+  --aspect-ratio 1:1
+```
+
+## 发布到 GitHub
+
+如果你要把这个项目推送到 GitHub，需要先新建一个空仓库，建议仓库名：
+
+```text
+nebula-canvas
+```
+
+然后在本地执行：
+
+```powershell
+cd E:\codex\nebula-canvas
+git add -A
+git commit -m "feat: initial nebula canvas image toolkit"
+git branch -M main
+git remote add origin https://github.com/<你的用户名>/nebula-canvas.git
+git push -u origin main
+```
+
+不要提交以下内容：
+
+- `.env`
+- `outputs/`
+- `node_modules/`
+- `.npm-cache/`
+
+这些已经写入 `.gitignore`。
