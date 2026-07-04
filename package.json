@@ -8,7 +8,8 @@
   },
   "scripts": {
     "check": "node scripts/check.mjs",
-    "mcp": "node bin/nebula-canvas-mcp.js"
+    "mcp": "node bin/nebula-canvas-mcp.js",
+    "web": "node bin/nebula-canvas-web.js"
   },
   "keywords": [
     "apinebula",
@@ -28,6 +29,7 @@
   "files": [
     "bin",
     "src",
+    "public",
     "skills",
     "examples",
     "README.md",

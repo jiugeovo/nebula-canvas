@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>NebulaCanvas</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="app">
+      <header class="topbar">
+        <div>
+          <h1>NebulaCanvas</h1>
+          <p>APINebula 异步生图本地控制台</p>
+        </div>
+        <div class="status" id="healthStatus">连接中</div>
+      </header>
+
+      <section class="layout">
+        <form class="panel form-panel" id="generateForm">
+          <div class="section-title">
+            <h2>生成图片</h2>
+            <button type="button" class="ghost" id="refreshPresets">刷新预设</button>
+          </div>
+
+          <label>
+            预设
+            <select name="preset" id="presetSelect">
+              <option value="adobe">adobe</option>
+              <option value="banana">banana</option>
+              <option value="image2">image2</option>
+            </select>
+          </label>
+
+          <label>
+            模型
+            <select name="model" id="modelSelect"></select>
+          </label>
+
+          <label>
+            提示词
+            <textarea name="prompt" rows="7" required placeholder="描述主体、场景、构图、光线、风格和文字要求"></textarea>
+          </label>
+
+          <div class="grid two">
+            <label>
+              尺寸
+              <input name="size" id="sizeInput" placeholder="1024x1024" />
+            </label>
+            <label>
+              分辨率
+              <select name="resolution" id="resolutionSelect">
+                <option value="">默认</option>
+                <option value="1K">1K</option>
+                <option value="2K">2K</option>
+                <option value="4K">4K</option>
+              </select>
+            </label>
+          </div>
+
+          <div class="grid two">
+            <label>
+              比例
+              <input name="aspectRatio" id="aspectRatioInput" placeholder="1:1" />
+            </label>
+            <label>
+              质量
+              <select name="quality">
+                <option value="">默认</option>
+                <option value="auto">auto</option>
+                <option value="low">low</option>
+                <option value="medium">medium</option>
+                <option value="high">high</option>
+              </select>
+            </label>
+          </div>
+
+          <label>
+            输出目录
+            <input name="outputDir" id="outputDirInput" placeholder="留空使用 .env 配置" />
+          </label>
+
+          <label class="checkline">
+            <input type="checkbox" name="noDownload" />
+            不下载图片，仅保留返回 URL
+          </label>
+
+          <button class="primary" type="submit">提交任务</button>
+        </form>
+
+        <section class="panel result-panel">
+          <div class="section-title">
+            <h2>任务结果</h2>
+            <button type="button" class="ghost" id="refreshJobs">刷新任务</button>
+          </div>
+
+          <div id="activeJob" class="empty">暂无任务</div>
+          <div class="history">
+            <h3>历史任务</h3>
+            <div id="jobList" class="job-list"></div>
+          </div>
+        </section>
+      </section>
+    </main>
+
+    <template id="jobTemplate">
+      <article class="job-card">
+        <div class="job-head">
+          <strong data-field="status"></strong>
+          <span data-field="model"></span>
+        </div>
+        <p data-field="prompt"></p>
+        <div class="meta">
+          <span data-field="taskId"></span>
+          <span data-field="updatedAt"></span>
+        </div>
+      </article>
+    </template>
+
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

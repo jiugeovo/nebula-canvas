@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildGenerationPayload, extractImageUrls } from "../src/apinebula.js";
 import { applyPreset, getPresetSummary } from "../src/models.js";
+import { startWebServer } from "../src/web-server.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -38,6 +39,9 @@ const content = fs.readFileSync(file, "utf8");
 assert(content.startsWith("---\n"), `${skill} frontmatter`);
 assert(content.includes(`name: ${skill}`), `${skill} name`);
 assert(content.includes("description:"), `${skill} description`);
+
+const server = await startWebServer({ host: "127.0.0.1", port: 0 });
+await server.close();
 
 console.log("NebulaCanvas checks passed.");
 
