@@ -9,7 +9,7 @@ import {
   stringifyJsonForRequest,
 } from "../src/apinebula.js";
 import { applyPreset, getPresetSummary } from "../src/models.js";
-import { startWebServer } from "../src/web-server.js";
+import { compactJobForMemory, startWebServer } from "../src/web-server.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -50,6 +50,14 @@ const editTaskPayload = buildEditTaskPayload({
   quality: "high",
 });
 assert(editTaskPayload.images[0].image_url === "https://example.com/input.png", "async edit image url");
+
+const compactedJob = compactJobForMemory({
+  configOverrides: { apiKey: "secret" },
+  remoteTask: { data: [{ b64_json: "x".repeat(100) }], detail: { data: [{ b64_json: "y".repeat(100) }] } },
+});
+assert(!compactedJob.configOverrides?.apiKey, "compact removes api key");
+assert(compactedJob.remoteTask.data[0].b64_json === "[omitted]", "compact top-level b64");
+assert(compactedJob.remoteTask.detail.data[0].b64_json === "[omitted]", "compact nested b64");
 
 const urls = extractImageUrls({
   detail: {

@@ -219,7 +219,7 @@ export async function saveImageResponseArtifacts({ response, model, outputDir, d
   const safeModel = sanitizeName(model || "image-edit");
   const stem = `${new Date().toISOString().replace(/[:.]/g, "-")}-${safeModel}-edit`;
   const metadataPath = path.join(outputDir, `${stem}.json`);
-  await fs.promises.writeFile(metadataPath, `${JSON.stringify(response, null, 2)}\n`, "utf8");
+  await fs.promises.writeFile(metadataPath, `${JSON.stringify(omitBase64Payloads(response), null, 2)}\n`, "utf8");
 
   const imageUrls = extractImageUrls(response);
   const downloadedFiles = [];
@@ -327,5 +327,17 @@ function contentTypeFromPath(filePath) {
       ".webp": "image/webp",
       ".gif": "image/gif",
     }[ext] || "application/octet-stream"
+  );
+}
+
+function omitBase64Payloads(value) {
+  if (!value || typeof value !== "object") return value;
+  if (Array.isArray(value)) return value.map(omitBase64Payloads);
+
+  return Object.fromEntries(
+    Object.entries(value).map(([key, item]) => [
+      key,
+      key === "b64_json" && typeof item === "string" ? "[omitted]" : omitBase64Payloads(item),
+    ]),
   );
 }

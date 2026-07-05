@@ -20,6 +20,7 @@ const projectRoot = path.resolve(__dirname, "..");
 const publicDir = path.join(projectRoot, "public");
 const terminalStatuses = new Set(["completed", "failed", "cancelled"]);
 const jobs = new Map();
+const maxJobs = 20;
 
 export async function startWebServer({ host = "127.0.0.1", port = 8787 } = {}) {
   const server = http.createServer((request, response) => {
@@ -128,6 +129,7 @@ function createGenerationJob(body) {
     apiKey: cleanString(body.apiKey),
   });
   jobs.set(id, job);
+  pruneJobs();
   runGenerationJob(job);
   return job;
 }
@@ -156,6 +158,7 @@ function createSyncEditJob(form) {
     apiKey: cleanString(form.fields.apiKey),
   });
   jobs.set(id, job);
+  pruneJobs();
   runSyncEditJob(job, form.files.filter((file) => file.fieldName === "image"));
   return job;
 }
@@ -183,6 +186,7 @@ function createAsyncEditJob(body) {
     apiKey: cleanString(body.apiKey),
   });
   jobs.set(id, job);
+  pruneJobs();
   runAsyncEditJob(job);
   return job;
 }
@@ -200,6 +204,14 @@ function createBaseJob(id, request, configOverrides = {}) {
     artifacts: null,
     error: null,
     configOverrides,
+  };
+}
+
+export function compactJobForMemory(job) {
+  return {
+    ...job,
+    configOverrides: undefined,
+    remoteTask: compactLargeResponse(job.remoteTask),
   };
 }
 
@@ -259,11 +271,13 @@ async function runGenerationJob(job) {
 
     job.completedAt = new Date().toISOString();
     job.updatedAt = job.completedAt;
+    compactStoredJob(job);
   } catch (error) {
     job.status = "failed";
     job.error = { message: error?.message || String(error) };
     job.completedAt = new Date().toISOString();
     job.updatedAt = job.completedAt;
+    compactStoredJob(job);
   }
 }
 
@@ -304,11 +318,13 @@ async function runSyncEditJob(job, imageFiles) {
     job.artifacts = publicArtifacts(artifacts, config.outputDir);
     job.completedAt = new Date().toISOString();
     job.updatedAt = job.completedAt;
+    compactStoredJob(job);
   } catch (error) {
     job.status = "failed";
     job.error = { message: error?.message || String(error) };
     job.completedAt = new Date().toISOString();
     job.updatedAt = job.completedAt;
+    compactStoredJob(job);
   }
 }
 
@@ -365,11 +381,13 @@ async function runAsyncEditJob(job) {
 
     job.completedAt = new Date().toISOString();
     job.updatedAt = job.completedAt;
+    compactStoredJob(job);
   } catch (error) {
     job.status = "failed";
     job.error = { message: error?.message || String(error) };
     job.completedAt = new Date().toISOString();
     job.updatedAt = job.completedAt;
+    compactStoredJob(job);
   }
 }
 
@@ -417,6 +435,34 @@ function publicJob(job) {
     artifacts: job.artifacts,
     error: job.error,
   };
+}
+
+function compactStoredJob(job) {
+  const compacted = compactJobForMemory(job);
+  Object.keys(job).forEach((key) => delete job[key]);
+  Object.assign(job, compacted);
+}
+
+function compactLargeResponse(value) {
+  if (!value || typeof value !== "object") return value;
+  if (Array.isArray(value)) return value.map(compactLargeResponse);
+
+  const result = {};
+  for (const [key, item] of Object.entries(value)) {
+    if (key === "b64_json" && typeof item === "string") {
+      result[key] = "[omitted]";
+    } else {
+      result[key] = compactLargeResponse(item);
+    }
+  }
+  return result;
+}
+
+function pruneJobs() {
+  const sorted = [...jobs.values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  for (const job of sorted.slice(maxJobs)) {
+    jobs.delete(job.id);
+  }
 }
 
 function publicArtifacts(artifacts, outputDir) {
