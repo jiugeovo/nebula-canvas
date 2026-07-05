@@ -51,9 +51,9 @@ export class APINebulaClient {
       method: "POST",
       headers: {
         Authorization: `Bearer ${this.config.apiKey}`,
-        "Content-Type": "application/json",
+        "Content-Type": "application/json; charset=utf-8",
       },
-      body: JSON.stringify(payload),
+      body: stringifyJsonForRequest(payload),
     });
     return readJsonResponse(response);
   }
@@ -82,6 +82,13 @@ export function buildGenerationPayload(options) {
   setIfPresent(payload, "response_format", options.responseFormat);
 
   return payload;
+}
+
+export function stringifyJsonForRequest(value) {
+  return JSON.stringify(value).replace(/[^\x20-\x7E]/g, (char) => {
+    const code = char.charCodeAt(0).toString(16).padStart(4, "0");
+    return `\\u${code}`;
+  });
 }
 
 export function extractImageUrls(task) {

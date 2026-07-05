@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildGenerationPayload, extractImageUrls } from "../src/apinebula.js";
+import { buildGenerationPayload, extractImageUrls, stringifyJsonForRequest } from "../src/apinebula.js";
 import { applyPreset, getPresetSummary } from "../src/models.js";
 import { startWebServer } from "../src/web-server.js";
 
@@ -18,6 +18,13 @@ const payload = buildGenerationPayload({
 
 assert(payload.model === "adobe-gpt-image-2", "payload model");
 assert(payload.aspect_ratio === "1:1", "payload aspect_ratio");
+
+const asciiJson = stringifyJsonForRequest({
+  prompt: "古风人物",
+  model: "adobe-gpt-image-2",
+});
+assert(asciiJson.includes("\\u53e4\\u98ce\\u4eba\\u7269"), "request json escapes non-ascii");
+assert(!asciiJson.includes("古风人物"), "request json is ascii-safe");
 
 const urls = extractImageUrls({
   detail: {
