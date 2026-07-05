@@ -125,7 +125,7 @@ server.tool(
       prompt: args.prompt,
       size: args.size || "1024x1024",
       quality: args.quality || "high",
-      responseFormat: args.responseFormat || "b64_json",
+      responseFormat: args.responseFormat || "url",
       inputFidelity: args.inputFidelity || "high",
     });
 

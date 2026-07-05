@@ -1,9 +1,11 @@
 import http from "node:http";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
+import Busboy from "busboy";
 import {
   APINebulaClient,
   buildEditFields,
@@ -21,6 +23,8 @@ const publicDir = path.join(projectRoot, "public");
 const terminalStatuses = new Set(["completed", "failed", "cancelled"]);
 const jobs = new Map();
 const maxJobs = 20;
+export const DEFAULT_SYNC_EDIT_RESPONSE_FORMAT = "url";
+const maxMultipartBytes = 32 * 1024 * 1024;
 
 export async function startWebServer({ host = "127.0.0.1", port = 8787 } = {}) {
   const server = http.createServer((request, response) => {
@@ -91,11 +95,20 @@ async function handleRequest(request, response) {
   }
 
   if (url.pathname === "/api/edit-jobs" && request.method === "POST") {
-    const body = await readRequestBody(request, 32 * 1024 * 1024);
     const contentType = request.headers["content-type"] || "";
-    const job = contentType.includes("multipart/form-data")
-      ? createSyncEditJob(parseMultipartBody(body, contentType))
-      : createAsyncEditJob(JSON.parse(body.toString("utf8") || "{}"));
+    if (contentType.includes("multipart/form-data")) {
+      const form = await readMultipartForm(request, contentType);
+      try {
+        const job = createSyncEditJob(form);
+        writeJson(response, 202, publicJob(job));
+      } catch (error) {
+        await cleanupMultipartFiles(form.uploadDir, form.files);
+        throw error;
+      }
+      return;
+    }
+
+    const job = createAsyncEditJob(await readJsonBody(request));
     writeJson(response, 202, publicJob(job));
     return;
   }
@@ -145,14 +158,14 @@ function createSyncEditJob(form) {
     prompt: form.fields.prompt,
     size: form.fields.size || "1024x1024",
     quality: form.fields.quality || "high",
-    responseFormat: form.fields.responseFormat || form.fields.response_format || "b64_json",
+    responseFormat: form.fields.responseFormat || form.fields.response_format || DEFAULT_SYNC_EDIT_RESPONSE_FORMAT,
     inputFidelity: form.fields.inputFidelity || form.fields.input_fidelity || "high",
     outputDir: form.fields.outputDir,
     noDownload: form.fields.noDownload === "true",
   });
   request.imageFiles = form.files
     .filter((file) => file.fieldName === "image")
-    .map((file) => ({ filename: file.filename, contentType: file.contentType, size: file.buffer.length }));
+    .map((file) => ({ filename: file.filename, contentType: file.contentType, size: file.size }));
 
   const job = createBaseJob(id, request, {
     apiKey: cleanString(form.fields.apiKey),
@@ -257,6 +270,8 @@ async function runGenerationJob(job) {
     }
 
     if (job.status === "completed") {
+      job.status = "saving";
+      job.updatedAt = new Date().toISOString();
       const artifacts = await saveTaskArtifacts({
         taskId,
         model: payload.model,
@@ -265,6 +280,7 @@ async function runGenerationJob(job) {
         download: !job.request.noDownload,
       });
       job.artifacts = publicArtifacts(artifacts, config.outputDir);
+      job.status = "completed";
     } else {
       job.error = job.remoteTask?.error || { message: `Task ended with status ${job.status}.` };
     }
@@ -289,7 +305,7 @@ async function runSyncEditJob(job, imageFiles) {
       prompt: job.request.prompt,
       size: job.request.size,
       quality: job.request.quality,
-      responseFormat: job.request.responseFormat || "b64_json",
+      responseFormat: job.request.responseFormat || DEFAULT_SYNC_EDIT_RESPONSE_FORMAT,
       inputFidelity: job.request.inputFidelity || "high",
     });
 
@@ -301,14 +317,15 @@ async function runSyncEditJob(job, imageFiles) {
     const response = await client.editImages({
       fields,
       images: imageFiles.map((file) => ({
-        buffer: file.buffer,
+        path: file.path,
         filename: file.filename,
         contentType: file.contentType,
       })),
     });
 
     job.remoteTask = response;
-    job.status = "completed";
+    job.status = "saving";
+    job.updatedAt = new Date().toISOString();
     const artifacts = await saveImageResponseArtifacts({
       response,
       model: fields.model,
@@ -316,6 +333,7 @@ async function runSyncEditJob(job, imageFiles) {
       download: !job.request.noDownload,
     });
     job.artifacts = publicArtifacts(artifacts, config.outputDir);
+    job.status = "completed";
     job.completedAt = new Date().toISOString();
     job.updatedAt = job.completedAt;
     compactStoredJob(job);
@@ -325,6 +343,8 @@ async function runSyncEditJob(job, imageFiles) {
     job.completedAt = new Date().toISOString();
     job.updatedAt = job.completedAt;
     compactStoredJob(job);
+  } finally {
+    await cleanupTempFiles(imageFiles);
   }
 }
 
@@ -367,6 +387,8 @@ async function runAsyncEditJob(job) {
     }
 
     if (job.status === "completed") {
+      job.status = "saving";
+      job.updatedAt = new Date().toISOString();
       const artifacts = await saveTaskArtifacts({
         taskId,
         model: payload.model,
@@ -375,6 +397,7 @@ async function runAsyncEditJob(job) {
         download: !job.request.noDownload,
       });
       job.artifacts = publicArtifacts(artifacts, config.outputDir);
+      job.status = "completed";
     } else {
       job.error = job.remoteTask?.error || { message: `Task ended with status ${job.status}.` };
     }
@@ -554,52 +577,118 @@ function setCommonHeaders(response) {
   response.setHeader("Access-Control-Allow-Headers", "Content-Type");
 }
 
-function parseMultipartBody(body, contentType) {
-  const boundaryMatch = contentType.match(/boundary=(?:"([^"]+)"|([^;]+))/i);
-  const boundary = boundaryMatch?.[1] || boundaryMatch?.[2];
-  if (!boundary) throw new Error("Missing multipart boundary.");
-
-  const delimiter = Buffer.from(`--${boundary}`);
+async function readMultipartForm(request, contentType) {
+  const uploadDir = await fsp.mkdtemp(path.join(os.tmpdir(), "nebula-canvas-upload-"));
   const fields = {};
   const files = [];
-  let cursor = body.indexOf(delimiter);
+  let totalFileBytes = 0;
 
-  while (cursor !== -1) {
-    cursor += delimiter.length;
-    if (body.slice(cursor, cursor + 2).toString() === "--") break;
-    if (body.slice(cursor, cursor + 2).toString() === "\r\n") cursor += 2;
+  return new Promise((resolve, reject) => {
+    const parser = Busboy({
+      headers: { "content-type": contentType },
+      limits: {
+        files: 8,
+        fileSize: maxMultipartBytes,
+        fieldSize: 128 * 1024,
+        fields: 32,
+      },
+    });
 
-    const headerEnd = body.indexOf(Buffer.from("\r\n\r\n"), cursor);
-    if (headerEnd === -1) break;
-    const headerText = body.slice(cursor, headerEnd).toString("utf8");
-    const nextDelimiter = body.indexOf(delimiter, headerEnd + 4);
-    if (nextDelimiter === -1) break;
+    const pendingWrites = [];
+    let settled = false;
 
-    let content = body.slice(headerEnd + 4, nextDelimiter);
-    if (content.slice(-2).toString() === "\r\n") content = content.slice(0, -2);
+    const fail = (error) => {
+      if (settled) return;
+      settled = true;
+      request.unpipe(parser);
+      request.resume();
+      cleanupMultipartFiles(uploadDir, files).finally(() => reject(error));
+    };
 
-    const disposition = headerText.match(/content-disposition:[^\r\n]+/i)?.[0] || "";
-    const name = disposition.match(/name="([^"]+)"/i)?.[1];
-    const filename = disposition.match(/filename="([^"]*)"/i)?.[1];
-    const contentTypeHeader = headerText.match(/content-type:\s*([^\r\n]+)/i)?.[1]?.trim();
+    parser.on("field", (name, value) => {
+      fields[name] = value;
+    });
 
-    if (name) {
-      if (filename) {
-        files.push({
-          fieldName: name,
-          filename,
-          contentType: contentTypeHeader || "application/octet-stream",
-          buffer: content,
-        });
-      } else {
-        fields[name] = content.toString("utf8");
+    parser.on("file", (fieldName, stream, info) => {
+      const filename = path.basename(info.filename || "upload.bin");
+      const tempPath = path.join(uploadDir, `${randomUUID()}-${filename}`);
+      const file = {
+        fieldName,
+        filename,
+        contentType: info.mimeType || "application/octet-stream",
+        path: tempPath,
+        size: 0,
+      };
+      files.push(file);
+
+      stream.on("data", (chunk) => {
+        file.size += chunk.length;
+        totalFileBytes += chunk.length;
+        if (totalFileBytes > maxMultipartBytes) {
+          fail(new Error("Request body is too large."));
+        }
+      });
+      stream.on("limit", () => fail(new Error("Uploaded file is too large.")));
+
+      const write = new Promise((resolveWrite, rejectWrite) => {
+        const output = fs.createWriteStream(tempPath);
+        output.on("finish", resolveWrite);
+        output.on("error", rejectWrite);
+        stream.on("error", rejectWrite);
+        stream.pipe(output);
+      });
+      pendingWrites.push(write);
+    });
+
+    parser.on("error", fail);
+    parser.on("finish", async () => {
+      if (settled) return;
+      try {
+        await Promise.all(pendingWrites);
+        settled = true;
+        resolve({ fields, files, uploadDir });
+      } catch (error) {
+        fail(error);
       }
-    }
+    });
 
-    cursor = nextDelimiter;
+    request.pipe(parser);
+  });
+}
+
+async function cleanupTempFiles(files) {
+  const uploadDirs = new Set();
+  await Promise.all(
+    (files || [])
+      .filter((file) => file?.path)
+      .map(async (file) => {
+        uploadDirs.add(path.dirname(file.path));
+        try {
+          await fsp.unlink(file.path);
+        } catch {
+          // Temporary upload may already have been removed.
+        }
+      }),
+  );
+
+  await Promise.all(
+    [...uploadDirs].map(async (uploadDir) => {
+      try {
+        await fsp.rm(uploadDir, { recursive: true, force: true });
+      } catch {
+        // Best-effort cleanup.
+      }
+    }),
+  );
+}
+
+async function cleanupMultipartFiles(uploadDir, files) {
+  await cleanupTempFiles(files);
+  try {
+    await fsp.rm(uploadDir, { recursive: true, force: true });
+  } catch {
+    // Best-effort cleanup.
   }
-
-  return { fields, files };
 }
 
 function contentType(filePath) {

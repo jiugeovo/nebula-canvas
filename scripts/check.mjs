@@ -9,7 +9,7 @@ import {
   stringifyJsonForRequest,
 } from "../src/apinebula.js";
 import { applyPreset, getPresetSummary } from "../src/models.js";
-import { compactJobForMemory, startWebServer } from "../src/web-server.js";
+import { DEFAULT_SYNC_EDIT_RESPONSE_FORMAT, compactJobForMemory, startWebServer } from "../src/web-server.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -42,6 +42,7 @@ const editFields = buildEditFields({
 });
 assert(editFields.input_fidelity === "high", "edit fields input_fidelity");
 assert(editFields.response_format === "b64_json", "edit fields response_format");
+assert(DEFAULT_SYNC_EDIT_RESPONSE_FORMAT === "url", "sync edit defaults to url response format");
 
 const editTaskPayload = buildEditTaskPayload({
   model: "gpt-image-2",

@@ -1,4 +1,4 @@
-﻿{
+{
   "name": "nebula-canvas",
   "version": "0.1.0",
   "description": "APINebula async image generation tools and Codex skills.",
@@ -20,7 +20,9 @@
   "license": "MIT",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.20.2",
+    "busboy": "^1.6.0",
     "dotenv": "^17.2.3",
+    "form-data": "^4.0.6",
     "zod": "^3.25.76"
   },
   "engines": {
@@ -36,4 +38,3 @@
     "LICENSE"
   ]
 }
-

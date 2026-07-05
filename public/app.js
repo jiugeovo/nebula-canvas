@@ -158,7 +158,7 @@ async function submitEdit() {
     body.append("prompt", data.prompt);
     body.append("size", data.size || "1024x1536");
     body.append("quality", data.quality || "high");
-    body.append("responseFormat", "b64_json");
+    body.append("responseFormat", "url");
     body.append("inputFidelity", data.inputFidelity || "high");
     if (data.outputDir) body.append("outputDir", data.outputDir);
     if (data.apiKey) body.append("apiKey", data.apiKey);
@@ -237,9 +237,17 @@ function renderActiveJob(job) {
     ${renderImages(imageFiles, imageUrls)}
     <details>
       <summary>查看 JSON</summary>
-      <pre>${escapeHtml(JSON.stringify(job, null, 2))}</pre>
+      <pre data-json-job-id="${escapeAttr(job.id)}">展开后加载</pre>
     </details>
   `;
+
+  const details = activeJob.querySelector("details");
+  details?.addEventListener("toggle", () => {
+    const pre = details.querySelector("pre");
+    if (!details.open || !pre || pre.dataset.loaded) return;
+    pre.textContent = JSON.stringify(job, null, 2);
+    pre.dataset.loaded = "true";
+  });
 }
 
 function renderImages(files, urls) {

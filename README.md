@@ -145,12 +145,12 @@ http://127.0.0.1:8787
 打开后可以在网页里选择模式：
 
 - 生图：提交异步生图任务。
-- 同步改图：上传本地参考图，调用 `POST /v1/images/edits`。
+- 同步改图：上传本地参考图，调用 `POST /v1/images/edits`，默认使用 `response_format=url` 以降低本地内存占用。
 - 异步改图：填写公网参考图 URL，调用 `POST /v1/image-tasks/edits`。
 
 下载后的图片和任务元数据仍然保存在 `NEBULA_CANVAS_OUTPUT_DIR` 指定的目录中。页面里的“临时 API Key”只用于本次本地任务，不会写入 `.env`，也不会在任务 JSON 中回显。
 
-本地服务会自动压缩任务历史中的大字段：同步改图返回的 `b64_json` 会在保存图片后从内存中的任务记录里替换为 `[omitted]`，任务历史默认只保留最近 20 条，避免长时间运行后占用过多内存。
+本地服务会自动压缩任务历史中的大字段：同步改图默认返回图片 URL，上传参考图和下载结果图都会尽量使用流式处理；如果手动指定返回 `b64_json`，保存图片后也会把内存中的任务记录替换为 `[omitted]`。任务历史默认只保留最近 20 条，避免长时间运行后占用过多内存。
 
 如果需要指定端口：
 
@@ -281,7 +281,7 @@ MCP 暴露四个工具：
 
 - `nebula_canvas_generate_image`
 - `nebula_canvas_get_task`
-- `nebula_canvas_edit_image`
+- `nebula_canvas_edit_image`（同步改图默认返回 URL）
 - `nebula_canvas_edit_image_async`
 
 ## 本地验证

@@ -1,6 +1,11 @@
 import fs from "node:fs";
+import http from "node:http";
+import https from "node:https";
 import path from "node:path";
 import crypto from "node:crypto";
+import { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
+import MultipartFormData from "form-data";
 import { ensureApiKey, ensureOutputDir } from "./config.js";
 
 const TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
@@ -20,7 +25,7 @@ export class APINebulaClient {
   }
 
   async editImages(payload) {
-    const form = new FormData();
+    const form = new MultipartFormData();
 
     for (const [key, value] of Object.entries(payload.fields || {})) {
       if (value !== undefined && value !== null && value !== "") {
@@ -29,21 +34,16 @@ export class APINebulaClient {
     }
 
     for (const file of payload.images || []) {
-      form.append("image", await blobFromFileInput(file), file.filename || "image.png");
+      await appendFileInput(form, "image", file, "image.png");
     }
 
     if (payload.mask) {
-      form.append("mask", await blobFromFileInput(payload.mask), payload.mask.filename || "mask.png");
+      await appendFileInput(form, "mask", payload.mask, "mask.png");
     }
 
-    const response = await fetch(`${this.config.baseUrl}/v1/images/edits`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${this.config.apiKey}`,
-      },
-      body: form,
+    return postMultipartJson(`${this.config.baseUrl}/v1/images/edits`, form, {
+      Authorization: `Bearer ${this.config.apiKey}`,
     });
-    return readJsonResponse(response);
   }
 
   async getImageTask(taskId, { detail = true } = {}) {
@@ -273,8 +273,13 @@ async function downloadFile(url, filePath) {
     throw new Error(`Failed to download ${url}: HTTP ${response.status}`);
   }
 
-  const buffer = Buffer.from(await response.arrayBuffer());
-  await fs.promises.writeFile(filePath, buffer);
+  if (!response.body) {
+    const buffer = Buffer.from(await response.arrayBuffer());
+    await fs.promises.writeFile(filePath, buffer);
+    return;
+  }
+
+  await pipeline(Readable.fromWeb(response.body), fs.createWriteStream(filePath));
 }
 
 function sleep(ms) {
@@ -304,17 +309,96 @@ function extensionFromUrl(url) {
   return `-${crypto.randomBytes(4).toString("hex")}.png`;
 }
 
-async function blobFromFileInput(file) {
+async function appendFileInput(form, fieldName, file, defaultFilename) {
+  const filename = file.filename || (file.path ? path.basename(file.path) : defaultFilename);
+  const contentType = file.contentType || (file.path ? contentTypeFromPath(file.path) : "application/octet-stream");
+
   if (file.buffer) {
-    return new Blob([file.buffer], { type: file.contentType || "application/octet-stream" });
+    form.append(fieldName, file.buffer, {
+      filename,
+      contentType,
+      knownLength: file.buffer.length,
+    });
+    return;
   }
 
   if (file.path) {
-    const buffer = await fs.promises.readFile(file.path);
-    return new Blob([buffer], { type: file.contentType || contentTypeFromPath(file.path) });
+    const options = {
+      filename,
+      contentType,
+    };
+    try {
+      options.knownLength = (await fs.promises.stat(file.path)).size;
+    } catch {
+      // Chunked upload is fine when the local size cannot be read.
+    }
+    form.append(fieldName, fs.createReadStream(file.path), options);
+    return;
   }
 
   throw new Error("Image file must include a buffer or path.");
+}
+
+async function postMultipartJson(urlString, form, headers = {}) {
+  const { statusCode, text } = await submitMultipartForm(urlString, form, headers);
+  return parseJsonResponseText(statusCode, text);
+}
+
+async function submitMultipartForm(urlString, form, headers = {}) {
+  const url = new URL(urlString);
+  const transport = url.protocol === "https:" ? https : http;
+  const requestHeaders = form.getHeaders(headers);
+
+  try {
+    requestHeaders["content-length"] = await new Promise((resolve, reject) => {
+      form.getLength((error, length) => (error ? reject(error) : resolve(length)));
+    });
+  } catch {
+    // Streams without a known length can still be sent with chunked transfer.
+  }
+
+  return new Promise((resolve, reject) => {
+    const request = transport.request(
+      {
+        method: "POST",
+        protocol: url.protocol,
+        hostname: url.hostname,
+        port: url.port,
+        path: `${url.pathname}${url.search}`,
+        headers: requestHeaders,
+      },
+      (response) => {
+        const chunks = [];
+        response.on("data", (chunk) => chunks.push(chunk));
+        response.on("end", () => {
+          resolve({
+            statusCode: response.statusCode || 0,
+            text: Buffer.concat(chunks).toString("utf8"),
+          });
+        });
+      },
+    );
+
+    request.on("error", reject);
+    form.on("error", reject);
+    form.pipe(request);
+  });
+}
+
+function parseJsonResponseText(statusCode, text) {
+  let json;
+  try {
+    json = text ? JSON.parse(text) : {};
+  } catch {
+    throw new Error(`APINebula returned non-JSON HTTP ${statusCode}: ${text.slice(0, 500)}`);
+  }
+
+  if (statusCode < 200 || statusCode >= 300) {
+    const message = json?.error?.message || json?.message || JSON.stringify(json);
+    throw new Error(`APINebula HTTP ${statusCode}: ${message}`);
+  }
+
+  return json;
 }
 
 function contentTypeFromPath(filePath) {
