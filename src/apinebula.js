@@ -15,6 +15,37 @@ export class APINebulaClient {
     return this.postJson("/v1/image-tasks/generations", payload);
   }
 
+  async createImageEditTask(payload) {
+    return this.postJson("/v1/image-tasks/edits", payload);
+  }
+
+  async editImages(payload) {
+    const form = new FormData();
+
+    for (const [key, value] of Object.entries(payload.fields || {})) {
+      if (value !== undefined && value !== null && value !== "") {
+        form.append(key, String(value));
+      }
+    }
+
+    for (const file of payload.images || []) {
+      form.append("image", await blobFromFileInput(file), file.filename || "image.png");
+    }
+
+    if (payload.mask) {
+      form.append("mask", await blobFromFileInput(payload.mask), payload.mask.filename || "mask.png");
+    }
+
+    const response = await fetch(`${this.config.baseUrl}/v1/images/edits`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${this.config.apiKey}`,
+      },
+      body: form,
+    });
+    return readJsonResponse(response);
+  }
+
   async getImageTask(taskId, { detail = true } = {}) {
     const suffix = detail ? "?detail=true" : "";
     return this.getJson(`/v1/image-tasks/${encodeURIComponent(taskId)}${suffix}`);
@@ -38,6 +69,16 @@ export class APINebulaClient {
 
   async generateImageAsync(payload, options = {}) {
     const task = await this.createImageGenerationTask(payload);
+    const taskId = task.task_id || task.id;
+    if (!taskId) {
+      throw new Error(`APINebula did not return a task id: ${JSON.stringify(task)}`);
+    }
+    const finalTask = options.wait === false ? task : await this.waitForImageTask(taskId, options);
+    return { taskId, task, finalTask };
+  }
+
+  async editImageAsync(payload, options = {}) {
+    const task = await this.createImageEditTask(payload);
     const taskId = task.task_id || task.id;
     if (!taskId) {
       throw new Error(`APINebula did not return a task id: ${JSON.stringify(task)}`);
@@ -82,6 +123,36 @@ export function buildGenerationPayload(options) {
   setIfPresent(payload, "response_format", options.responseFormat);
 
   return payload;
+}
+
+export function buildEditTaskPayload(options) {
+  const payload = {
+    model: options.model,
+    prompt: options.prompt,
+    images: (options.imageUrls || []).map((imageUrl) => ({ image_url: imageUrl })),
+  };
+
+  setIfPresent(payload, "size", options.size);
+  setIfPresent(payload, "quality", options.quality);
+  setIfPresent(payload, "response_format", options.responseFormat);
+
+  return payload;
+}
+
+export function buildEditFields(options) {
+  const fields = {
+    model: options.model,
+    prompt: options.prompt,
+  };
+
+  setIfPresent(fields, "size", options.size);
+  setIfPresent(fields, "quality", options.quality);
+  setIfPresent(fields, "response_format", options.responseFormat);
+  setIfPresent(fields, "input_fidelity", options.inputFidelity);
+  setIfPresent(fields, "background", options.background);
+  setIfPresent(fields, "moderation", options.moderation);
+
+  return fields;
 }
 
 export function stringifyJsonForRequest(value) {
@@ -131,6 +202,42 @@ export async function saveTaskArtifacts({ taskId, model, finalTask, outputDir, d
     for (let index = 0; index < imageUrls.length; index += 1) {
       const url = imageUrls[index];
       const filePath = path.join(outputDir, `${stem}-${index + 1}${extensionFromUrl(url)}`);
+      await downloadFile(url, filePath);
+      downloadedFiles.push(filePath);
+    }
+  }
+
+  return {
+    metadataPath,
+    imageUrls,
+    downloadedFiles,
+  };
+}
+
+export async function saveImageResponseArtifacts({ response, model, outputDir, download = true }) {
+  await ensureOutputDir(outputDir);
+  const safeModel = sanitizeName(model || "image-edit");
+  const stem = `${new Date().toISOString().replace(/[:.]/g, "-")}-${safeModel}-edit`;
+  const metadataPath = path.join(outputDir, `${stem}.json`);
+  await fs.promises.writeFile(metadataPath, `${JSON.stringify(response, null, 2)}\n`, "utf8");
+
+  const imageUrls = extractImageUrls(response);
+  const downloadedFiles = [];
+
+  const items = Array.isArray(response?.data) ? response.data : [];
+  for (let index = 0; index < items.length; index += 1) {
+    const item = items[index];
+    if (download && item?.b64_json) {
+      const filePath = path.join(outputDir, `${stem}-${index + 1}.png`);
+      await fs.promises.writeFile(filePath, Buffer.from(item.b64_json, "base64"));
+      downloadedFiles.push(filePath);
+    }
+  }
+
+  if (download) {
+    for (let index = 0; index < imageUrls.length; index += 1) {
+      const url = imageUrls[index];
+      const filePath = path.join(outputDir, `${stem}-url-${index + 1}${extensionFromUrl(url)}`);
       await downloadFile(url, filePath);
       downloadedFiles.push(filePath);
     }
@@ -195,4 +302,30 @@ function extensionFromUrl(url) {
     // Fall through to a stable image extension.
   }
   return `-${crypto.randomBytes(4).toString("hex")}.png`;
+}
+
+async function blobFromFileInput(file) {
+  if (file.buffer) {
+    return new Blob([file.buffer], { type: file.contentType || "application/octet-stream" });
+  }
+
+  if (file.path) {
+    const buffer = await fs.promises.readFile(file.path);
+    return new Blob([buffer], { type: file.contentType || contentTypeFromPath(file.path) });
+  }
+
+  throw new Error("Image file must include a buffer or path.");
+}
+
+function contentTypeFromPath(filePath) {
+  const ext = path.extname(filePath).toLowerCase();
+  return (
+    {
+      ".png": "image/png",
+      ".jpg": "image/jpeg",
+      ".jpeg": "image/jpeg",
+      ".webp": "image/webp",
+      ".gif": "image/gif",
+    }[ext] || "application/octet-stream"
+  );
 }

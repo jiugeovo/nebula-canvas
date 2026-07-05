@@ -142,7 +142,13 @@ npm run web
 http://127.0.0.1:8787
 ```
 
-打开后可以在网页里选择预设、模型、尺寸、分辨率，提交任务并查看生成结果。下载后的图片和任务元数据仍然保存在 `NEBULA_CANVAS_OUTPUT_DIR` 指定的目录中。
+打开后可以在网页里选择模式：
+
+- 生图：提交异步生图任务。
+- 同步改图：上传本地参考图，调用 `POST /v1/images/edits`。
+- 异步改图：填写公网参考图 URL，调用 `POST /v1/image-tasks/edits`。
+
+下载后的图片和任务元数据仍然保存在 `NEBULA_CANVAS_OUTPUT_DIR` 指定的目录中。页面里的“临时 API Key”只用于本次本地任务，不会写入 `.env`，也不会在任务 JSON 中回显。
 
 如果需要指定端口：
 
@@ -185,6 +191,21 @@ Invoke-RestMethod http://127.0.0.1:8787/api/jobs/<job_id>
 Invoke-RestMethod http://127.0.0.1:8787/api/jobs
 ```
 
+同步改图需要上传本地图片，适合在浏览器画布里操作；异步改图使用公网图片 URL，也可以直接调用 REST API：
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8787/api/edit-jobs `
+  -Method POST `
+  -ContentType "application/json" `
+  -Body '{
+    "model": "gpt-image-2",
+    "prompt": "保留主体构图，将画面调整为清晨暖光电影风，不要文字和水印",
+    "imageUrls": ["https://example.com/input.png"],
+    "size": "1024x1536",
+    "quality": "high"
+  }'
+```
+
 ## 分组说明
 
 创建 APINebula 令牌时，请选择对应分组：
@@ -219,6 +240,12 @@ Copy-Item -Recurse .\skills\nebula-canvas "$env:USERPROFILE\.codex\skills\"
 用 $nebula-canvas 生成一张高级感香水产品海报，使用 banana 预设。
 ```
 
+也可以让 Codex 通过 MCP 改图：
+
+```text
+用 $nebula-canvas 把这张本地图片改成红金古风灯笼氛围，使用 gpt-image-2。
+```
+
 Skill 负责告诉 Codex 如何选择模型和参数，真正请求接口的是 NebulaCanvas CLI / MCP。
 
 ## MCP 使用
@@ -248,10 +275,12 @@ Codex MCP 配置示例：
 }
 ```
 
-MCP 暴露两个工具：
+MCP 暴露四个工具：
 
 - `nebula_canvas_generate_image`
 - `nebula_canvas_get_task`
+- `nebula_canvas_edit_image`
+- `nebula_canvas_edit_image_async`
 
 ## 本地验证
 

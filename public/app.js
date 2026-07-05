@@ -3,6 +3,7 @@ const state = {
   jobs: [],
   activeJobId: null,
   pollTimer: null,
+  mode: "generate",
 };
 
 const form = document.querySelector("#generateForm");
@@ -12,6 +13,10 @@ const sizeInput = document.querySelector("#sizeInput");
 const resolutionSelect = document.querySelector("#resolutionSelect");
 const aspectRatioInput = document.querySelector("#aspectRatioInput");
 const outputDirInput = document.querySelector("#outputDirInput");
+const imageInput = document.querySelector("#imageInput");
+const imageUrlsInput = document.querySelector("#imageUrlsInput");
+const inputFidelitySelect = document.querySelector("#inputFidelitySelect");
+const submitButton = document.querySelector("#submitButton");
 const healthStatus = document.querySelector("#healthStatus");
 const activeJob = document.querySelector("#activeJob");
 const jobList = document.querySelector("#jobList");
@@ -20,27 +25,15 @@ const jobTemplate = document.querySelector("#jobTemplate");
 document.querySelector("#refreshPresets").addEventListener("click", loadPresets);
 document.querySelector("#refreshJobs").addEventListener("click", loadJobs);
 presetSelect.addEventListener("change", syncPresetDefaults);
+document.querySelectorAll("[data-mode]").forEach((button) => {
+  button.addEventListener("click", () => setMode(button.dataset.mode));
+});
 
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
-  const data = Object.fromEntries(new FormData(form).entries());
-  const payload = {
-    preset: data.preset,
-    model: data.model,
-    prompt: data.prompt,
-    size: data.size,
-    resolution: data.resolution,
-    aspectRatio: data.aspectRatio,
-    quality: data.quality,
-    outputDir: data.outputDir,
-    noDownload: form.elements.noDownload.checked,
-  };
 
   try {
-    const job = await api("/api/jobs", {
-      method: "POST",
-      body: JSON.stringify(cleanPayload(payload)),
-    });
+    const job = state.mode === "generate" ? await submitGeneration() : await submitEdit();
     state.activeJobId = job.id;
     await loadJobs();
     startPolling();
@@ -54,6 +47,7 @@ await init();
 async function init() {
   await loadHealth();
   await loadPresets();
+  setMode(state.mode);
   await loadJobs();
   startPolling();
 }
@@ -87,6 +81,16 @@ async function loadJobs() {
 }
 
 function syncPresetDefaults() {
+  if (state.mode !== "generate") {
+    modelSelect.innerHTML = "";
+    modelSelect.append(new Option("gpt-image-2", "gpt-image-2"));
+    modelSelect.value = "gpt-image-2";
+    if (!sizeInput.value || ["3504x2336", "2336x3504"].includes(sizeInput.value)) sizeInput.value = "1024x1536";
+    resolutionSelect.value = "";
+    aspectRatioInput.value = "";
+    return;
+  }
+
   const preset = state.presets.find((item) => item.name === presetSelect.value);
   if (!preset) return;
 
@@ -99,6 +103,90 @@ function syncPresetDefaults() {
   sizeInput.value = preset.defaults?.size || "";
   resolutionSelect.value = preset.defaults?.resolution || "";
   aspectRatioInput.value = preset.defaults?.aspectRatio || "";
+}
+
+function setMode(mode) {
+  state.mode = mode;
+  document.querySelectorAll("[data-mode]").forEach((button) => {
+    button.classList.toggle("active", button.dataset.mode === mode);
+  });
+  document.querySelectorAll("[data-generate-only]").forEach((node) => {
+    node.hidden = mode !== "generate";
+  });
+  document.querySelectorAll("[data-edit-only]").forEach((node) => {
+    node.hidden = mode === "generate";
+  });
+  document.querySelectorAll("[data-edit-sync-only]").forEach((node) => {
+    node.hidden = mode !== "edit-sync";
+  });
+  document.querySelectorAll("[data-edit-async-only]").forEach((node) => {
+    node.hidden = mode !== "edit-async";
+  });
+  resolutionSelect.closest("label").hidden = mode !== "generate";
+  aspectRatioInput.closest("label").hidden = mode !== "generate";
+  submitButton.textContent = mode === "generate" ? "提交生图任务" : mode === "edit-sync" ? "提交同步改图" : "提交异步改图";
+  syncPresetDefaults();
+}
+
+async function submitGeneration() {
+  const data = Object.fromEntries(new FormData(form).entries());
+  const payload = {
+    preset: data.preset,
+    model: data.model,
+    prompt: data.prompt,
+    size: data.size,
+    resolution: data.resolution,
+    aspectRatio: data.aspectRatio,
+    quality: data.quality,
+    outputDir: data.outputDir,
+    apiKey: data.apiKey,
+    noDownload: form.elements.noDownload.checked,
+  };
+
+  return api("/api/jobs", {
+    method: "POST",
+    body: JSON.stringify(cleanPayload(payload)),
+  });
+}
+
+async function submitEdit() {
+  const data = Object.fromEntries(new FormData(form).entries());
+
+  if (state.mode === "edit-sync") {
+    const body = new FormData();
+    body.append("model", data.model || "gpt-image-2");
+    body.append("prompt", data.prompt);
+    body.append("size", data.size || "1024x1536");
+    body.append("quality", data.quality || "high");
+    body.append("responseFormat", "b64_json");
+    body.append("inputFidelity", data.inputFidelity || "high");
+    if (data.outputDir) body.append("outputDir", data.outputDir);
+    if (data.apiKey) body.append("apiKey", data.apiKey);
+    body.append("noDownload", form.elements.noDownload.checked ? "true" : "false");
+    for (const file of imageInput.files || []) body.append("image", file);
+    return api("/api/edit-jobs", { method: "POST", body });
+  }
+
+  const imageUrls = imageUrlsInput.value
+    .split(/\r?\n/)
+    .map((value) => value.trim())
+    .filter(Boolean);
+  const payload = {
+    model: data.model || "gpt-image-2",
+    prompt: data.prompt,
+    imageUrls,
+    size: data.size || "1024x1536",
+    quality: data.quality || "high",
+    responseFormat: "b64_json",
+    outputDir: data.outputDir,
+    apiKey: data.apiKey,
+    noDownload: form.elements.noDownload.checked,
+  };
+
+  return api("/api/edit-jobs", {
+    method: "POST",
+    body: JSON.stringify(cleanPayload(payload)),
+  });
 }
 
 function renderJobs() {
@@ -135,6 +223,7 @@ function renderActiveJob(job) {
     <div class="active-top">
       <div>
         <h2>${escapeHtml(job.payload?.model || job.request?.model || job.request?.preset || "任务")}</h2>
+        <div class="mode-label">${escapeHtml(job.request?.mode || "generate")}</div>
         <p>${escapeHtml(job.request?.prompt || "")}</p>
       </div>
       <span class="badge ${escapeHtml(job.status)}">${escapeHtml(job.status)}</span>
@@ -186,13 +275,8 @@ function startPolling() {
 }
 
 async function api(path, options = {}) {
-  const response = await fetch(path, {
-    headers: {
-      "Content-Type": "application/json",
-      ...(options.headers || {}),
-    },
-    ...options,
-  });
+  const headers = options.body instanceof FormData ? options.headers || {} : { "Content-Type": "application/json", ...(options.headers || {}) };
+  const response = await fetch(path, { ...options, headers });
   const data = await response.json();
   if (!response.ok) throw new Error(data?.error?.message || `HTTP ${response.status}`);
   return data;

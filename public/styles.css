@@ -94,6 +94,31 @@ label {
   margin-bottom: 18px;
 }
 
+.segmented {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 4px;
+  margin-bottom: 18px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.segment {
+  min-height: 36px;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font-weight: 650;
+}
+
+.segment.active {
+  background: var(--panel);
+  color: var(--accent-dark);
+  box-shadow: 0 1px 4px rgba(19, 32, 54, 0.12);
+}
+
 h2 {
   font-size: 18px;
 }
@@ -199,6 +224,14 @@ button {
   justify-content: space-between;
   gap: 12px;
   margin-bottom: 12px;
+}
+
+.mode-label {
+  margin: 4px 0 8px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 650;
+  text-transform: uppercase;
 }
 
 .badge {

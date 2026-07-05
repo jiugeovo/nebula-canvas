@@ -19,11 +19,17 @@
       <section class="layout">
         <form class="panel form-panel" id="generateForm">
           <div class="section-title">
-            <h2>生成图片</h2>
+            <h2>画布</h2>
             <button type="button" class="ghost" id="refreshPresets">刷新预设</button>
           </div>
 
-          <label>
+          <div class="segmented" role="tablist" aria-label="任务模式">
+            <button type="button" class="segment active" data-mode="generate">生图</button>
+            <button type="button" class="segment" data-mode="edit-sync">同步改图</button>
+            <button type="button" class="segment" data-mode="edit-async">异步改图</button>
+          </div>
+
+          <label data-generate-only>
             预设
             <select name="preset" id="presetSelect">
               <option value="adobe">adobe</option>
@@ -75,9 +81,32 @@
             </label>
           </div>
 
+          <label data-edit-sync-only hidden>
+            参考图
+            <input name="image" id="imageInput" type="file" accept="image/png,image/jpeg,image/webp" multiple />
+          </label>
+
+          <label data-edit-async-only hidden>
+            参考图 URL
+            <textarea name="imageUrls" id="imageUrlsInput" rows="4" placeholder="每行一个公网图片 URL"></textarea>
+          </label>
+
+          <label data-edit-only hidden>
+            输入跟随
+            <select name="inputFidelity" id="inputFidelitySelect">
+              <option value="high">high</option>
+              <option value="">默认</option>
+            </select>
+          </label>
+
           <label>
             输出目录
             <input name="outputDir" id="outputDirInput" placeholder="留空使用 .env 配置" />
+          </label>
+
+          <label>
+            临时 API Key
+            <input name="apiKey" id="apiKeyInput" type="password" autocomplete="off" placeholder="留空使用 .env 配置" />
           </label>
 
           <label class="checkline">
@@ -85,7 +114,7 @@
             不下载图片，仅保留返回 URL
           </label>
 
-          <button class="primary" type="submit">提交任务</button>
+          <button class="primary" type="submit" id="submitButton">提交任务</button>
         </form>
 
         <section class="panel result-panel">

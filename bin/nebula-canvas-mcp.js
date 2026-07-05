@@ -1,8 +1,15 @@
-﻿#!/usr/bin/env node
+#!/usr/bin/env node
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { APINebulaClient, buildGenerationPayload, saveTaskArtifacts } from "../src/apinebula.js";
+import {
+  APINebulaClient,
+  buildEditFields,
+  buildEditTaskPayload,
+  buildGenerationPayload,
+  saveImageResponseArtifacts,
+  saveTaskArtifacts,
+} from "../src/apinebula.js";
 import { getConfig } from "../src/config.js";
 import { applyPreset } from "../src/models.js";
 
@@ -91,6 +98,120 @@ server.tool(
         {
           type: "text",
           text: JSON.stringify(task, null, 2),
+        },
+      ],
+    };
+  },
+);
+
+server.tool(
+  "nebula_canvas_edit_image",
+  "Edit one or more local images with APINebula gpt-image-2 sync image edits, then save returned artifacts.",
+  {
+    prompt: z.string().min(1),
+    imagePaths: z.array(z.string().min(1)).min(1),
+    model: z.string().optional(),
+    size: z.string().optional(),
+    quality: z.string().optional(),
+    responseFormat: z.string().optional(),
+    inputFidelity: z.string().optional(),
+    outputDir: z.string().optional(),
+    noDownload: z.boolean().optional(),
+  },
+  async (args) => {
+    const config = getConfig({ outputDir: args.outputDir });
+    const fields = buildEditFields({
+      model: args.model || "gpt-image-2",
+      prompt: args.prompt,
+      size: args.size || "1024x1024",
+      quality: args.quality || "high",
+      responseFormat: args.responseFormat || "b64_json",
+      inputFidelity: args.inputFidelity || "high",
+    });
+
+    const client = new APINebulaClient(config);
+    const response = await client.editImages({
+      fields,
+      images: args.imagePaths.map((imagePath) => ({ path: imagePath })),
+    });
+    const artifacts = await saveImageResponseArtifacts({
+      response,
+      model: fields.model,
+      outputDir: config.outputDir,
+      download: !args.noDownload,
+    });
+
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify(
+            {
+              status: "completed",
+              model: fields.model,
+              metadataPath: artifacts.metadataPath,
+              imageUrls: artifacts.imageUrls,
+              downloadedFiles: artifacts.downloadedFiles,
+            },
+            null,
+            2,
+          ),
+        },
+      ],
+    };
+  },
+);
+
+server.tool(
+  "nebula_canvas_edit_image_async",
+  "Edit image URLs with APINebula async image edit tasks, poll until completion, and save returned artifacts.",
+  {
+    prompt: z.string().min(1),
+    imageUrls: z.array(z.string().url()).min(1),
+    model: z.string().optional(),
+    size: z.string().optional(),
+    quality: z.string().optional(),
+    responseFormat: z.string().optional(),
+    outputDir: z.string().optional(),
+    noDownload: z.boolean().optional(),
+  },
+  async (args) => {
+    const config = getConfig({ outputDir: args.outputDir });
+    const payload = buildEditTaskPayload({
+      model: args.model || "gpt-image-2",
+      prompt: args.prompt,
+      imageUrls: args.imageUrls,
+      size: args.size,
+      quality: args.quality || "high",
+      responseFormat: args.responseFormat || "b64_json",
+    });
+
+    const client = new APINebulaClient(config);
+    const result = await client.editImageAsync(payload);
+    const artifacts = await saveTaskArtifacts({
+      taskId: result.taskId,
+      model: payload.model,
+      finalTask: result.finalTask,
+      outputDir: config.outputDir,
+      download: !args.noDownload,
+    });
+
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify(
+            {
+              taskId: result.taskId,
+              status: result.finalTask.status,
+              model: result.finalTask.model || payload.model,
+              metadataPath: artifacts.metadataPath,
+              imageUrls: artifacts.imageUrls,
+              downloadedFiles: artifacts.downloadedFiles,
+            },
+            null,
+            2,
+          ),
         },
       ],
     };
