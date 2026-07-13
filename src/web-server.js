@@ -20,18 +20,29 @@ import { applyPreset, getPresetSummary } from "./models.js";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(__dirname, "..");
 const publicDir = path.join(projectRoot, "public");
+const lucideBundlePath = path.join(projectRoot, "node_modules", "lucide", "dist", "umd", "lucide.min.js");
 const terminalStatuses = new Set(["completed", "failed", "cancelled"]);
 const jobs = new Map();
+const outputRoots = new Map();
 const maxJobs = 20;
+const maxOutputRoots = 64;
+const maxBatchSize = 12;
+const maxBatchConcurrency = 4;
 export const DEFAULT_SYNC_EDIT_RESPONSE_FORMAT = "url";
 const maxMultipartBytes = 32 * 1024 * 1024;
 
 export async function startWebServer({ host = "127.0.0.1", port = 8787 } = {}) {
   const server = http.createServer((request, response) => {
     handleRequest(request, response).catch((error) => {
-      writeJson(response, 500, {
+      if (response.headersSent) {
+        response.destroy(error);
+        return;
+      }
+      const statusCode = httpStatusForError(error);
+      writeJson(response, statusCode, {
         error: {
           message: error?.message || String(error),
+          code: error?.code,
         },
       });
     });
@@ -45,10 +56,16 @@ export async function startWebServer({ host = "127.0.0.1", port = 8787 } = {}) {
     });
   });
 
+  const address = server.address();
   return {
     host,
-    port,
-    close: () => new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve()))),
+    port: typeof address === "object" && address ? address.port : port,
+    close: () =>
+      new Promise((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+        server.closeIdleConnections?.();
+        server.closeAllConnections?.();
+      }),
   };
 }
 
@@ -64,11 +81,14 @@ async function handleRequest(request, response) {
   const url = new URL(request.url, "http://localhost");
 
   if (url.pathname === "/api/health" && request.method === "GET") {
-    const config = getConfig();
+    const overrides = connectionOverridesFromHeaders(request);
+    const config = getConfig(overrides);
     writeJson(response, 200, {
       ok: true,
       apiKeyConfigured: Boolean(config.apiKey),
       baseUrl: config.baseUrl,
+      usingCustomBaseUrl: Boolean(overrides.baseUrl),
+      usingCustomApiKey: Boolean(overrides.apiKey),
       outputDir: config.outputDir,
       presets: getPresetSummary(),
     });
@@ -88,8 +108,15 @@ async function handleRequest(request, response) {
   }
 
   if (url.pathname === "/api/jobs" && request.method === "POST") {
-    const body = await readJsonBody(request);
+    const body = withConnectionOverrides(await readJsonBody(request), request);
     const job = createGenerationJob(body);
+    writeJson(response, 202, publicJob(job));
+    return;
+  }
+
+  if (url.pathname === "/api/batches" && request.method === "POST") {
+    const body = withConnectionOverrides(await readJsonBody(request), request);
+    const job = createBatchGenerationJob(body);
     writeJson(response, 202, publicJob(job));
     return;
   }
@@ -98,6 +125,7 @@ async function handleRequest(request, response) {
     const contentType = request.headers["content-type"] || "";
     if (contentType.includes("multipart/form-data")) {
       const form = await readMultipartForm(request, contentType);
+      form.fields = withConnectionOverrides(form.fields, request);
       try {
         const job = createSyncEditJob(form);
         writeJson(response, 202, publicJob(job));
@@ -108,7 +136,7 @@ async function handleRequest(request, response) {
       return;
     }
 
-    const job = createAsyncEditJob(await readJsonBody(request));
+    const job = createAsyncEditJob(withConnectionOverrides(await readJsonBody(request), request));
     writeJson(response, 202, publicJob(job));
     return;
   }
@@ -129,17 +157,31 @@ async function handleRequest(request, response) {
     return;
   }
 
+  if (url.pathname === "/vendor/lucide.js" && request.method === "GET") {
+    await serveFile(response, lucideBundlePath);
+    return;
+  }
+
+  if (url.pathname.startsWith("/api/")) {
+    writeJson(response, 404, { error: { message: "API route not found.", code: "route_not_found" } });
+    return;
+  }
+
+  if (request.method !== "GET" && request.method !== "HEAD") {
+    writeJson(response, 405, { error: { message: "Method not allowed.", code: "method_not_allowed" } });
+    return;
+  }
+
   await serveStatic(response, url.pathname);
 }
 
 function createGenerationJob(body) {
-  if (!body || typeof body !== "object") throw new Error("JSON body is required.");
-  if (!body.prompt || typeof body.prompt !== "string") throw new Error("prompt is required.");
-  if (!body.preset && !body.model) throw new Error("preset or model is required.");
+  validateGenerationRequest(body);
 
   const id = randomUUID();
   const job = createBaseJob(id, sanitizeRequest(body), {
     apiKey: cleanString(body.apiKey),
+    baseUrl: validatedBaseUrl(body.baseUrl),
   });
   jobs.set(id, job);
   pruneJobs();
@@ -147,9 +189,47 @@ function createGenerationJob(body) {
   return job;
 }
 
+function createBatchGenerationJob(body) {
+  validateGenerationRequest(body);
+  const count = integerInRange(body.count, 2, maxBatchSize, "count");
+  const concurrency = integerInRange(body.concurrency ?? 2, 1, Math.min(maxBatchConcurrency, count), "concurrency");
+  const id = randomUUID();
+  const request = sanitizeRequest({ ...body, count, concurrency });
+  const job = createBaseJob(id, request, {
+    apiKey: cleanString(body.apiKey),
+    baseUrl: validatedBaseUrl(body.baseUrl),
+  });
+  job.kind = "batch";
+  job.batch = {
+    count,
+    concurrency,
+    outputDir: null,
+    manifestPath: null,
+    items: Array.from({ length: count }, (_, index) =>
+      createBaseJob(randomUUID(), {
+        ...request,
+        count: undefined,
+        concurrency: undefined,
+        batchId: id,
+        batchIndex: index + 1,
+      }),
+    ),
+  };
+  jobs.set(id, job);
+  pruneJobs();
+  runBatchGenerationJob(job);
+  return job;
+}
+
+function validateGenerationRequest(body) {
+  if (!body || typeof body !== "object") throw requestError("JSON body is required.");
+  if (!body.prompt || typeof body.prompt !== "string") throw requestError("prompt is required.");
+  if (!body.preset && !body.model) throw requestError("preset or model is required.");
+}
+
 function createSyncEditJob(form) {
-  if (!form.fields.prompt) throw new Error("prompt is required.");
-  if (!form.files.some((file) => file.fieldName === "image")) throw new Error("At least one image file is required.");
+  if (!form.fields.prompt) throw requestError("prompt is required.");
+  if (!form.files.some((file) => file.fieldName === "image")) throw requestError("At least one image file is required.");
 
   const id = randomUUID();
   const request = sanitizeEditRequest({
@@ -169,6 +249,7 @@ function createSyncEditJob(form) {
 
   const job = createBaseJob(id, request, {
     apiKey: cleanString(form.fields.apiKey),
+    baseUrl: validatedBaseUrl(form.fields.baseUrl),
   });
   jobs.set(id, job);
   pruneJobs();
@@ -177,10 +258,10 @@ function createSyncEditJob(form) {
 }
 
 function createAsyncEditJob(body) {
-  if (!body || typeof body !== "object") throw new Error("JSON body is required.");
-  if (!body.prompt || typeof body.prompt !== "string") throw new Error("prompt is required.");
+  if (!body || typeof body !== "object") throw requestError("JSON body is required.");
+  if (!body.prompt || typeof body.prompt !== "string") throw requestError("prompt is required.");
   const imageUrls = Array.isArray(body.imageUrls) ? body.imageUrls.filter(Boolean) : [];
-  if (!imageUrls.length) throw new Error("imageUrls is required for async edit.");
+  if (!imageUrls.length) throw requestError("imageUrls is required for async edit.");
 
   const id = randomUUID();
   const request = sanitizeEditRequest({
@@ -197,6 +278,7 @@ function createAsyncEditJob(body) {
 
   const job = createBaseJob(id, request, {
     apiKey: cleanString(body.apiKey),
+    baseUrl: validatedBaseUrl(body.baseUrl),
   });
   jobs.set(id, job);
   pruneJobs();
@@ -225,12 +307,22 @@ export function compactJobForMemory(job) {
     ...job,
     configOverrides: undefined,
     remoteTask: compactLargeResponse(job.remoteTask),
+    batch: job.batch
+      ? {
+          ...job.batch,
+          items: job.batch.items.map((item) => compactJobForMemory(item)),
+        }
+      : undefined,
   };
 }
 
-async function runGenerationJob(job) {
+async function runGenerationJob(job, options = {}) {
   try {
-    const config = getConfig({ outputDir: job.request.outputDir, apiKey: job.configOverrides?.apiKey });
+    const config = options.config || getConfig({
+      outputDir: job.request.outputDir,
+      apiKey: job.configOverrides?.apiKey,
+      baseUrl: job.configOverrides?.baseUrl,
+    });
     const payload = buildGenerationPayload(
       applyPreset(job.request.preset, {
         model: job.request.model,
@@ -246,6 +338,7 @@ async function runGenerationJob(job) {
     job.payload = payload;
     job.status = "submitting";
     job.updatedAt = new Date().toISOString();
+    await options.onUpdate?.(job);
 
     const client = new APINebulaClient(config);
     const task = await client.createImageGenerationTask(payload);
@@ -256,6 +349,7 @@ async function runGenerationJob(job) {
     job.remoteTask = task;
     job.status = task.status || "queued";
     job.updatedAt = new Date().toISOString();
+    await options.onUpdate?.(job);
 
     const started = Date.now();
     while (!terminalStatuses.has(job.status)) {
@@ -267,6 +361,7 @@ async function runGenerationJob(job) {
       job.remoteTask = remoteTask;
       job.status = remoteTask.status || job.status;
       job.updatedAt = new Date().toISOString();
+      await options.onUpdate?.(job);
     }
 
     if (job.status === "completed") {
@@ -278,6 +373,7 @@ async function runGenerationJob(job) {
         finalTask: job.remoteTask,
         outputDir: config.outputDir,
         download: !job.request.noDownload,
+        fileStem: options.fileStem,
       });
       job.artifacts = publicArtifacts(artifacts, config.outputDir);
       job.status = "completed";
@@ -288,18 +384,93 @@ async function runGenerationJob(job) {
     job.completedAt = new Date().toISOString();
     job.updatedAt = job.completedAt;
     compactStoredJob(job);
+    await options.onUpdate?.(job);
   } catch (error) {
     job.status = "failed";
     job.error = { message: error?.message || String(error) };
     job.completedAt = new Date().toISOString();
     job.updatedAt = job.completedAt;
     compactStoredJob(job);
+    await options.onUpdate?.(job);
+  }
+}
+
+async function runBatchGenerationJob(job) {
+  let persist = async () => {};
+  try {
+    const config = getConfig({
+      outputDir: job.request.outputDir,
+      apiKey: job.configOverrides?.apiKey,
+      baseUrl: job.configOverrides?.baseUrl,
+    });
+    const batchDirectory = path.join(config.outputDir, "batches", batchDirectoryName(job));
+    const manifestPath = path.join(batchDirectory, "manifest.json");
+    const batchConfig = { ...config, outputDir: batchDirectory };
+    let manifestWrites = Promise.resolve();
+
+    job.batch.outputDir = batchDirectory;
+    job.batch.manifestPath = manifestPath;
+    job.artifacts = { manifestPath, metadataPath: manifestPath, imageUrls: [], downloadedFiles: [] };
+    job.status = "running";
+    job.updatedAt = new Date().toISOString();
+    await fsp.mkdir(batchDirectory, { recursive: true });
+
+    persist = () => {
+      syncBatchArtifacts(job);
+      job.updatedAt = new Date().toISOString();
+      manifestWrites = manifestWrites.then(() => writeBatchManifest(job));
+      return manifestWrites;
+    };
+    await persist();
+
+    await runWithConcurrency(job.batch.items, job.batch.concurrency, async (item, index) => {
+      await runGenerationJob(item, {
+        config: batchConfig,
+        fileStem: String(index + 1).padStart(3, "0"),
+        onUpdate: persist,
+      });
+    });
+
+    await manifestWrites;
+    const summary = summarizeBatch(job.batch.items);
+    job.status = summary.failed === summary.total ? "failed" : summary.failed > 0 ? "partial" : "completed";
+    job.completedAt = new Date().toISOString();
+    job.updatedAt = job.completedAt;
+    syncBatchArtifacts(job);
+    compactStoredJob(job);
+    await writeBatchManifest(job);
+  } catch (error) {
+    job.status = "failed";
+    job.error = { message: error?.message || String(error) };
+    job.completedAt = new Date().toISOString();
+    job.updatedAt = job.completedAt;
+    for (const item of job.batch?.items || []) {
+      if (item.status !== "queued") continue;
+      item.status = "cancelled";
+      item.error = { message: "Batch stopped before this item could start." };
+      item.completedAt = job.completedAt;
+      item.updatedAt = job.completedAt;
+    }
+    syncBatchArtifacts(job);
+    compactStoredJob(job);
+    if (job.batch?.manifestPath) {
+      try {
+        await persist();
+        await writeBatchManifest(job);
+      } catch {
+        // Preserve the original batch error when the manifest also cannot be written.
+      }
+    }
   }
 }
 
 async function runSyncEditJob(job, imageFiles) {
   try {
-    const config = getConfig({ outputDir: job.request.outputDir, apiKey: job.configOverrides?.apiKey });
+    const config = getConfig({
+      outputDir: job.request.outputDir,
+      apiKey: job.configOverrides?.apiKey,
+      baseUrl: job.configOverrides?.baseUrl,
+    });
     const fields = buildEditFields({
       model: job.request.model || "gpt-image-2",
       prompt: job.request.prompt,
@@ -350,7 +521,11 @@ async function runSyncEditJob(job, imageFiles) {
 
 async function runAsyncEditJob(job) {
   try {
-    const config = getConfig({ outputDir: job.request.outputDir, apiKey: job.configOverrides?.apiKey });
+    const config = getConfig({
+      outputDir: job.request.outputDir,
+      apiKey: job.configOverrides?.apiKey,
+      baseUrl: job.configOverrides?.baseUrl,
+    });
     const payload = buildEditTaskPayload({
       model: job.request.model || "gpt-image-2",
       prompt: job.request.prompt,
@@ -426,6 +601,8 @@ function sanitizeRequest(body) {
     responseFormat: cleanString(body.responseFormat),
     outputDir: cleanString(body.outputDir),
     noDownload: Boolean(body.noDownload),
+    count: optionalInteger(body.count),
+    concurrency: optionalInteger(body.concurrency),
   };
 }
 
@@ -447,6 +624,7 @@ function sanitizeEditRequest(body) {
 function publicJob(job) {
   return {
     id: job.id,
+    kind: job.kind || "job",
     status: job.status,
     createdAt: job.createdAt,
     updatedAt: job.updatedAt,
@@ -456,8 +634,101 @@ function publicJob(job) {
     taskId: job.taskId,
     remoteTask: job.remoteTask,
     artifacts: job.artifacts,
+    batch: job.batch ? publicBatch(job.batch) : undefined,
     error: job.error,
   };
+}
+
+function publicBatch(batch) {
+  return {
+    count: batch.count,
+    concurrency: batch.concurrency,
+    outputDir: batch.outputDir,
+    manifestPath: batch.manifestPath,
+    summary: summarizeBatch(batch.items),
+    items: batch.items.map((item, index) => ({
+      id: item.id,
+      index: index + 1,
+      status: item.status,
+      createdAt: item.createdAt,
+      updatedAt: item.updatedAt,
+      completedAt: item.completedAt,
+      taskId: item.taskId,
+      artifacts: item.artifacts,
+      error: item.error,
+    })),
+  };
+}
+
+export function summarizeBatch(items = []) {
+  const summary = {
+    total: items.length,
+    queued: 0,
+    active: 0,
+    completed: 0,
+    failed: 0,
+    finished: 0,
+  };
+  for (const item of items) {
+    if (item.status === "completed") summary.completed += 1;
+    else if (["failed", "cancelled"].includes(item.status)) summary.failed += 1;
+    else if (item.status === "queued") summary.queued += 1;
+    else summary.active += 1;
+  }
+  summary.finished = summary.completed + summary.failed;
+  return summary;
+}
+
+export async function runWithConcurrency(items, concurrency, worker) {
+  let nextIndex = 0;
+  const workerCount = Math.min(Math.max(1, concurrency), items.length);
+  await Promise.all(
+    Array.from({ length: workerCount }, async () => {
+      while (nextIndex < items.length) {
+        const index = nextIndex;
+        nextIndex += 1;
+        await worker(items[index], index);
+      }
+    }),
+  );
+}
+
+function syncBatchArtifacts(job) {
+  if (!job.batch) return;
+  const imageUrls = [];
+  const downloadedFiles = [];
+  for (const item of job.batch.items) {
+    imageUrls.push(...(item.artifacts?.imageUrls || []));
+    downloadedFiles.push(...(item.artifacts?.downloadedFiles || []));
+  }
+  job.artifacts = {
+    manifestPath: job.batch.manifestPath,
+    metadataPath: job.batch.manifestPath,
+    imageUrls,
+    downloadedFiles,
+  };
+}
+
+async function writeBatchManifest(job) {
+  if (!job.batch?.manifestPath) return;
+  const manifest = {
+    schemaVersion: 1,
+    id: job.id,
+    status: job.status,
+    createdAt: job.createdAt,
+    updatedAt: job.updatedAt,
+    completedAt: job.completedAt,
+    request: job.request,
+    batch: publicBatch(job.batch),
+    artifacts: job.artifacts,
+    error: job.error,
+  };
+  await fsp.writeFile(job.batch.manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+}
+
+function batchDirectoryName(job) {
+  const timestamp = job.createdAt.replace(/[:.]/g, "-");
+  return `${timestamp}-${job.id.slice(0, 8)}`;
 }
 
 function compactStoredJob(job) {
@@ -488,7 +759,7 @@ function pruneJobs() {
   }
 }
 
-function publicArtifacts(artifacts, outputDir) {
+export function publicArtifacts(artifacts, outputDir) {
   return {
     metadataPath: artifacts.metadataPath,
     imageUrls: artifacts.imageUrls,
@@ -499,17 +770,25 @@ function publicArtifacts(artifacts, outputDir) {
   };
 }
 
-function fileUrl(filePath, outputDir) {
-  const relative = path.relative(path.resolve(outputDir), path.resolve(filePath));
+export function fileUrl(filePath, outputDir) {
+  const root = path.resolve(outputDir);
+  const relative = path.relative(root, path.resolve(filePath));
   if (relative.startsWith("..") || path.isAbsolute(relative)) return null;
-  return `/api/files/${relative.split(path.sep).map(encodeURIComponent).join("/")}`;
+  const rootId = registerOutputRoot(root);
+  return `/api/files/${rootId}/${relative.split(path.sep).map(encodeURIComponent).join("/")}`;
 }
 
 async function serveOutputFile(response, relativePath) {
-  const config = getConfig();
-  const outputDir = path.resolve(config.outputDir);
-  const filePath = path.resolve(outputDir, relativePath);
-  if (!filePath.startsWith(outputDir + path.sep)) {
+  const segments = relativePath.split(/[\\/]/).filter(Boolean);
+  const registeredRoot = outputRoots.get(segments[0]);
+  const outputDir = registeredRoot || path.resolve(getConfig().outputDir);
+  const fileSegments = registeredRoot ? segments.slice(1) : segments;
+  if (!fileSegments.length) {
+    writeJson(response, 404, { error: { message: "File not found." } });
+    return;
+  }
+  const filePath = path.resolve(outputDir, ...fileSegments);
+  if (!isPathInside(outputDir, filePath)) {
     writeJson(response, 403, { error: { message: "File is outside output directory." } });
     return;
   }
@@ -552,7 +831,11 @@ async function serveFile(response, filePath, fallbackToIndex = false) {
 async function readJsonBody(request) {
   const body = await readRequestBody(request, 1024 * 1024);
   if (!body.length) return {};
-  return JSON.parse(body.toString("utf8"));
+  try {
+    return JSON.parse(body.toString("utf8"));
+  } catch {
+    throw requestError("Request body must be valid JSON.", "invalid_json");
+  }
 }
 
 async function readRequestBody(request, maxBytes) {
@@ -574,7 +857,7 @@ function writeJson(response, statusCode, data) {
 function setCommonHeaders(response) {
   response.setHeader("Access-Control-Allow-Origin", "*");
   response.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
-  response.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  response.setHeader("Access-Control-Allow-Headers", "Content-Type,X-Nebula-Base-Url,X-Nebula-Api-Key");
 }
 
 async function readMultipartForm(request, contentType) {
@@ -711,6 +994,79 @@ function contentType(filePath) {
 
 function cleanString(value) {
   return typeof value === "string" ? value.trim() : undefined;
+}
+
+function validatedBaseUrl(value) {
+  const cleaned = cleanString(value);
+  if (!cleaned) return undefined;
+  let url;
+  try {
+    url = new URL(cleaned);
+  } catch {
+    throw requestError("baseUrl must be a valid http or https URL.");
+  }
+  if (!["http:", "https:"].includes(url.protocol) || url.username || url.password) {
+    throw requestError("baseUrl must be a valid http or https URL without credentials.");
+  }
+  if (url.search || url.hash) {
+    throw requestError("baseUrl must not include a query string or fragment.");
+  }
+  return cleaned.replace(/\/+$/, "");
+}
+
+function connectionOverridesFromHeaders(request) {
+  return {
+    baseUrl: validatedBaseUrl(request.headers["x-nebula-base-url"]),
+    apiKey: cleanString(request.headers["x-nebula-api-key"]),
+  };
+}
+
+function withConnectionOverrides(values, request) {
+  const overrides = connectionOverridesFromHeaders(request);
+  return {
+    ...values,
+    ...(overrides.baseUrl ? { baseUrl: overrides.baseUrl } : {}),
+    ...(overrides.apiKey ? { apiKey: overrides.apiKey } : {}),
+  };
+}
+
+function optionalInteger(value) {
+  if (value === undefined || value === null || value === "") return undefined;
+  const number = Number(value);
+  return Number.isInteger(number) ? number : undefined;
+}
+
+function integerInRange(value, minimum, maximum, name) {
+  const number = Number(value);
+  if (!Number.isInteger(number) || number < minimum || number > maximum) {
+    throw requestError(`${name} must be an integer between ${minimum} and ${maximum}.`);
+  }
+  return number;
+}
+
+function registerOutputRoot(outputDir) {
+  for (const [id, root] of outputRoots) {
+    if (root === outputDir) return id;
+  }
+  const id = randomUUID();
+  outputRoots.set(id, outputDir);
+  if (outputRoots.size > maxOutputRoots) outputRoots.delete(outputRoots.keys().next().value);
+  return id;
+}
+
+function isPathInside(root, filePath) {
+  const relative = path.relative(path.resolve(root), path.resolve(filePath));
+  return relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative);
+}
+
+function requestError(message, code = "invalid_request") {
+  return Object.assign(new Error(message), { statusCode: 400, code });
+}
+
+function httpStatusForError(error) {
+  if (Number.isInteger(error?.statusCode)) return error.statusCode;
+  if (/too large/i.test(error?.message || "")) return 413;
+  return 500;
 }
 
 function sleep(ms) {

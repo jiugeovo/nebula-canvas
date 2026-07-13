@@ -188,10 +188,10 @@ export function extractImageUrls(task) {
   return [...new Set(urls)];
 }
 
-export async function saveTaskArtifacts({ taskId, model, finalTask, outputDir, download = true }) {
+export async function saveTaskArtifacts({ taskId, model, finalTask, outputDir, download = true, fileStem }) {
   await ensureOutputDir(outputDir);
   const safeModel = sanitizeName(model || finalTask?.model || "image");
-  const stem = `${new Date().toISOString().replace(/[:.]/g, "-")}-${safeModel}-${taskId}`;
+  const stem = fileStem || `${new Date().toISOString().replace(/[:.]/g, "-")}-${safeModel}-${taskId}`;
   const metadataPath = path.join(outputDir, `${stem}.json`);
   await fs.promises.writeFile(metadataPath, `${JSON.stringify(finalTask, null, 2)}\n`, "utf8");
 
@@ -201,7 +201,8 @@ export async function saveTaskArtifacts({ taskId, model, finalTask, outputDir, d
   if (download) {
     for (let index = 0; index < imageUrls.length; index += 1) {
       const url = imageUrls[index];
-      const filePath = path.join(outputDir, `${stem}-${index + 1}${extensionFromUrl(url)}`);
+      const imageSuffix = fileStem && imageUrls.length === 1 ? "" : `-${index + 1}`;
+      const filePath = path.join(outputDir, `${stem}${imageSuffix}${extensionFromUrl(url)}`);
       await downloadFile(url, filePath);
       downloadedFiles.push(filePath);
     }

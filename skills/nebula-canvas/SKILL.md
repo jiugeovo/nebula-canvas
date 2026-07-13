@@ -30,7 +30,7 @@ Choose a preset from the user's request:
 | --- | --- | --- | --- |
 | Adobe GPT Image 2, Adobe 2K/4K, cinematic/realistic image generation | `adobe` | `NEBULA_CANVAS_ADOBE_MODEL` | `adobe` |
 | Nano Banana, Banana Pro, Banana 2, Gemini-style image generation | `banana` | `NEBULA_CANVAS_BANANA_MODEL` | `adobe` |
-| gpt-image-2 1K image generation | `image2` | `NEBULA_CANVAS_IMAGE2_MODEL` | `gpt-image-2-1k` |
+| gpt-image-2 1K image generation | `image2` | `NEBULA_CANVAS_IMAGE2_MODEL` | `image-2-1k` |
 
 Use `banana` for any of these models:
 
@@ -51,14 +51,14 @@ For local image editing:
 - Tool: `nebula_canvas_edit_image`
 - Required input: `prompt`, `imagePaths`
 - Default model: `gpt-image-2`
-- Token group: `gpt-image-2-1k`
+- Token group: `image-2-1k`
 
 For async image editing with public image URLs:
 
 - Tool: `nebula_canvas_edit_image_async`
 - Required input: `prompt`, `imageUrls`
 - Default model: `gpt-image-2`
-- Token group: `gpt-image-2-1k`
+- Token group: `image-2-1k`
 
 If MCP is not available, run the CLI:
 

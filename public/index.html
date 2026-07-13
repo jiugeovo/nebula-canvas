@@ -3,149 +3,397 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>NebulaCanvas</title>
+    <meta name="color-scheme" content="light" />
+    <meta name="theme-color" content="#fff5f8" />
+    <title>NebulaCanvas 图像工作台</title>
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
-    <main class="app">
+    <a class="skip-link" href="#workspace">跳到工作区</a>
+
+    <div class="app-shell">
       <header class="topbar">
-        <div>
-          <h1>NebulaCanvas</h1>
-          <p>APINebula 异步生图本地控制台</p>
+        <div class="brand">
+          <span class="brand-mark" aria-hidden="true"><i data-lucide="wand-sparkles"></i></span>
+          <div>
+            <h1>NebulaCanvas</h1>
+            <p>图像工作台</p>
+          </div>
         </div>
-        <div class="status" id="healthStatus">连接中</div>
+
+        <div class="service-cluster">
+          <button class="connection" id="openConnectionSettings" type="button" data-state="connecting" aria-haspopup="dialog" aria-controls="connectionDialog">
+            <span class="status-dot" aria-hidden="true"></span>
+            <span class="connection-copy">
+              <strong id="healthLabel">正在连接</strong>
+              <small id="healthMeta">本地服务</small>
+            </span>
+            <i data-lucide="chevron-right"></i>
+          </button>
+          <button class="icon-button" id="refreshHealth" type="button" title="刷新服务状态" aria-label="刷新服务状态">
+            <i data-lucide="refresh-cw"></i>
+          </button>
+        </div>
       </header>
 
-      <section class="layout">
-        <form class="panel form-panel" id="generateForm">
-          <div class="section-title">
-            <h2>画布</h2>
-            <button type="button" class="ghost" id="refreshPresets">刷新预设</button>
+      <main class="workspace" id="workspace">
+        <aside class="workspace-pane composer-pane" aria-labelledby="composerTitle">
+          <div class="pane-heading composer-heading">
+            <div>
+              <span class="eyebrow">CREATE</span>
+              <h2 id="composerTitle">新建图像</h2>
+            </div>
           </div>
 
-          <div class="segmented" role="tablist" aria-label="任务模式">
-            <button type="button" class="segment active" data-mode="generate">生图</button>
-            <button type="button" class="segment" data-mode="edit-sync">同步改图</button>
-            <button type="button" class="segment" data-mode="edit-async">异步改图</button>
+          <form id="generateForm" class="composer-form">
+            <div class="mode-switch" role="tablist" aria-label="任务模式">
+              <button type="button" class="mode-button active" data-mode="generate" role="tab" aria-selected="true">
+                <i data-lucide="sparkles"></i>
+                <span>生成</span>
+              </button>
+              <button type="button" class="mode-button" data-mode="edit-sync" role="tab" aria-selected="false">
+                <i data-lucide="image-plus"></i>
+                <span>本地改图</span>
+              </button>
+              <button type="button" class="mode-button" data-mode="edit-async" role="tab" aria-selected="false">
+                <i data-lucide="link-2"></i>
+                <span>URL 改图</span>
+              </button>
+            </div>
+
+            <div class="form-content">
+              <section class="form-section model-section" aria-labelledby="modelSectionTitle">
+                <div class="form-section-heading">
+                  <h3 id="modelSectionTitle">模型配置</h3>
+                </div>
+
+                <div class="field-grid two-columns model-fields">
+                  <label class="field" data-generate-only>
+                    <span class="field-label">模型系列</span>
+                    <select name="preset" id="presetSelect">
+                      <option value="adobe">Adobe</option>
+                      <option value="banana">Banana</option>
+                      <option value="image2" selected>Image 2</option>
+                    </select>
+                  </label>
+
+                  <label class="field model-field">
+                    <span class="field-label">具体模型</span>
+                    <select name="model" id="modelSelect" required></select>
+                  </label>
+                </div>
+
+                <div class="model-group-row" aria-label="当前模型分组">
+                  <span class="model-group-label"><i data-lucide="layers-3"></i>模型分组</span>
+                  <code id="groupLabel" aria-live="polite">待加载</code>
+                </div>
+              </section>
+
+              <section class="form-section reference-section" data-edit-sync-only hidden>
+                <div class="form-section-heading">
+                  <h3>参考图</h3>
+                  <span class="section-meta" id="fileCount">0 / 8</span>
+                </div>
+                <label class="dropzone" id="dropzone" for="imageInput" tabindex="0">
+                  <input name="image" id="imageInput" type="file" accept="image/png,image/jpeg,image/webp" multiple hidden />
+                  <span class="dropzone-icon" aria-hidden="true"><i data-lucide="upload"></i></span>
+                  <span>
+                    <strong>添加参考图</strong>
+                    <small>PNG、JPEG、WebP · 单次最多 8 张</small>
+                  </span>
+                </label>
+                <div class="file-preview-grid" id="filePreviews"></div>
+              </section>
+
+              <section class="form-section reference-section" data-edit-async-only hidden>
+                <div class="form-section-heading">
+                  <h3>参考图</h3>
+                  <span class="section-meta" id="urlCount">0 个链接</span>
+                </div>
+                <label class="field">
+                  <span class="field-label">公网图片 URL</span>
+                  <textarea name="imageUrls" id="imageUrlsInput" rows="4" placeholder="https://example.com/image.png&#10;每行一个链接"></textarea>
+                </label>
+              </section>
+
+              <section class="form-section prompt-section" aria-labelledby="promptSectionTitle">
+                <div class="form-section-heading">
+                  <h3 id="promptSectionTitle">提示词</h3>
+                  <span class="section-meta" id="promptCount">0 字</span>
+                </div>
+                <label class="field prompt-field">
+                  <span class="sr-only">提示词</span>
+                  <textarea
+                    name="prompt"
+                    id="promptInput"
+                    rows="7"
+                    maxlength="8000"
+                    required
+                    placeholder="描述主体、场景、构图、光线、风格与文字要求"
+                  ></textarea>
+                </label>
+              </section>
+
+              <section class="form-section parameters-section" aria-labelledby="parametersTitle">
+                <div class="form-section-heading">
+                  <h3 id="parametersTitle">输出参数</h3>
+                </div>
+
+                <div class="field-grid two-columns">
+                  <label class="field">
+                    <span class="field-label">尺寸</span>
+                    <input name="size" id="sizeInput" list="sizeOptions" placeholder="1024x1024" autocomplete="off" />
+                    <datalist id="sizeOptions">
+                      <option value="1024x1024"></option>
+                      <option value="1024x1536"></option>
+                      <option value="1536x1024"></option>
+                      <option value="2048x2048"></option>
+                      <option value="3504x2336"></option>
+                      <option value="2336x3504"></option>
+                    </datalist>
+                  </label>
+
+                  <label class="field">
+                    <span class="field-label">质量</span>
+                    <select name="quality" id="qualitySelect">
+                      <option value="">模型默认</option>
+                      <option value="auto">自动</option>
+                      <option value="low">低</option>
+                      <option value="medium">中</option>
+                      <option value="high">高</option>
+                    </select>
+                  </label>
+                </div>
+
+                <div class="field-grid two-columns" data-generate-only>
+                  <label class="field">
+                    <span class="field-label">分辨率</span>
+                    <select name="resolution" id="resolutionSelect">
+                      <option value="">模型默认</option>
+                      <option value="1K">1K</option>
+                      <option value="2K">2K</option>
+                      <option value="4K">4K</option>
+                    </select>
+                  </label>
+
+                  <label class="field">
+                    <span class="field-label">画面比例</span>
+                    <input name="aspectRatio" id="aspectRatioInput" list="ratioOptions" placeholder="1:1" autocomplete="off" />
+                    <datalist id="ratioOptions">
+                      <option value="1:1"></option>
+                      <option value="3:2"></option>
+                      <option value="2:3"></option>
+                      <option value="16:9"></option>
+                      <option value="9:16"></option>
+                    </datalist>
+                  </label>
+                </div>
+
+                <label class="field" data-edit-sync-only hidden>
+                  <span class="field-label">输入跟随</span>
+                  <select name="inputFidelity" id="inputFidelitySelect">
+                    <option value="high">高</option>
+                    <option value="">模型默认</option>
+                  </select>
+                </label>
+              </section>
+
+              <section class="form-section batch-section" data-generate-only aria-labelledby="batchTitle">
+                <div class="form-section-heading">
+                  <h3 id="batchTitle">生成计划</h3>
+                  <span class="section-meta" id="batchModeLabel">单张</span>
+                </div>
+
+                <div class="batch-controls">
+                  <label class="field">
+                    <span class="field-label">数量</span>
+                    <span class="stepper">
+                      <button type="button" data-step="-1" title="减少数量" aria-label="减少数量">
+                        <i data-lucide="minus"></i>
+                      </button>
+                      <input name="count" id="batchCountInput" type="number" min="1" max="12" value="1" inputmode="numeric" aria-describedby="batchSummary" />
+                      <button type="button" data-step="1" title="增加数量" aria-label="增加数量">
+                        <i data-lucide="plus"></i>
+                      </button>
+                    </span>
+                  </label>
+
+                  <label class="field" id="concurrencyField">
+                    <span class="field-label">并发</span>
+                    <select name="concurrency" id="concurrencySelect" disabled>
+                      <option value="1">1 个任务</option>
+                    </select>
+                  </label>
+                </div>
+
+                <div class="batch-summary" id="batchSummary">
+                  <i data-lucide="layers-3"></i>
+                  <span>单张任务</span>
+                </div>
+              </section>
+
+              <details class="advanced-settings">
+                <summary>
+                  <span><i data-lucide="settings-2"></i>高级设置</span>
+                  <i class="summary-chevron" data-lucide="chevron-down"></i>
+                </summary>
+                <div class="advanced-content">
+                  <label class="field">
+                    <span class="field-label"><i data-lucide="folder-output"></i>输出目录</span>
+                    <input name="outputDir" id="outputDirInput" placeholder="使用默认输出目录" autocomplete="off" />
+                  </label>
+
+                  <label class="toggle-row">
+                    <span>
+                      <strong>仅保留远程 URL</strong>
+                      <small>跳过本地图片下载</small>
+                    </span>
+                    <input type="checkbox" name="noDownload" />
+                  </label>
+                </div>
+              </details>
+            </div>
+
+            <div class="form-alert" id="formAlert" role="alert" hidden></div>
+
+            <div class="submit-bar">
+              <p id="submitMeta">Image 2 · 1024x1024</p>
+              <button class="primary-button" type="submit" id="submitButton">
+                <i data-lucide="sparkles"></i>
+                <span>生成图像</span>
+              </button>
+            </div>
+          </form>
+        </aside>
+
+        <section class="workspace-pane stage-pane" aria-labelledby="stageTitle">
+          <div class="pane-heading stage-heading">
+            <div>
+              <span class="eyebrow">OUTPUT</span>
+              <h2 id="stageTitle">当前任务</h2>
+            </div>
+            <div class="heading-actions">
+              <button class="secondary-button" id="reusePrompt" type="button" hidden>
+                <i data-lucide="rotate-ccw"></i>
+                <span>复用参数</span>
+              </button>
+              <button class="icon-button" id="refreshJobs" type="button" title="刷新任务" aria-label="刷新任务">
+                <i data-lucide="refresh-cw"></i>
+              </button>
+            </div>
           </div>
 
-          <label data-generate-only>
-            预设
-            <select name="preset" id="presetSelect">
-              <option value="adobe">adobe</option>
-              <option value="banana">banana</option>
-              <option value="image2">image2</option>
-            </select>
-          </label>
-
-          <label>
-            模型
-            <select name="model" id="modelSelect"></select>
-          </label>
-
-          <label>
-            提示词
-            <textarea name="prompt" rows="7" required placeholder="描述主体、场景、构图、光线、风格和文字要求"></textarea>
-          </label>
-
-          <div class="grid two">
-            <label>
-              尺寸
-              <input name="size" id="sizeInput" placeholder="1024x1024" />
-            </label>
-            <label>
-              分辨率
-              <select name="resolution" id="resolutionSelect">
-                <option value="">默认</option>
-                <option value="1K">1K</option>
-                <option value="2K">2K</option>
-                <option value="4K">4K</option>
-              </select>
-            </label>
-          </div>
-
-          <div class="grid two">
-            <label>
-              比例
-              <input name="aspectRatio" id="aspectRatioInput" placeholder="1:1" />
-            </label>
-            <label>
-              质量
-              <select name="quality">
-                <option value="">默认</option>
-                <option value="auto">auto</option>
-                <option value="low">low</option>
-                <option value="medium">medium</option>
-                <option value="high">high</option>
-              </select>
-            </label>
-          </div>
-
-          <label data-edit-sync-only hidden>
-            参考图
-            <input name="image" id="imageInput" type="file" accept="image/png,image/jpeg,image/webp" multiple />
-          </label>
-
-          <label data-edit-async-only hidden>
-            参考图 URL
-            <textarea name="imageUrls" id="imageUrlsInput" rows="4" placeholder="每行一个公网图片 URL"></textarea>
-          </label>
-
-          <label data-edit-only hidden>
-            输入跟随
-            <select name="inputFidelity" id="inputFidelitySelect">
-              <option value="high">high</option>
-              <option value="">默认</option>
-            </select>
-          </label>
-
-          <label>
-            输出目录
-            <input name="outputDir" id="outputDirInput" placeholder="留空使用 .env 配置" />
-          </label>
-
-          <label>
-            临时 API Key
-            <input name="apiKey" id="apiKeyInput" type="password" autocomplete="off" placeholder="留空使用 .env 配置" />
-          </label>
-
-          <label class="checkline">
-            <input type="checkbox" name="noDownload" />
-            不下载图片，仅保留返回 URL
-          </label>
-
-          <button class="primary" type="submit" id="submitButton">提交任务</button>
-        </form>
-
-        <section class="panel result-panel">
-          <div class="section-title">
-            <h2>任务结果</h2>
-            <button type="button" class="ghost" id="refreshJobs">刷新任务</button>
-          </div>
-
-          <div id="activeJob" class="empty">暂无任务</div>
-          <div class="history">
-            <h3>历史任务</h3>
-            <div id="jobList" class="job-list"></div>
+          <div class="stage-content" id="activeJob" aria-live="polite">
+            <div class="empty-state">
+              <span class="empty-icon" aria-hidden="true"><i data-lucide="images"></i></span>
+              <h3>画布已就绪</h3>
+              <p>新任务会显示在这里</p>
+            </div>
           </div>
         </section>
-      </section>
-    </main>
+
+        <aside class="workspace-pane history-pane" aria-labelledby="historyTitle">
+          <div class="pane-heading history-heading">
+            <div>
+              <span class="eyebrow">QUEUE</span>
+              <h2 id="historyTitle">任务记录 <span id="jobCount">0</span></h2>
+            </div>
+          </div>
+
+          <div class="history-filters" role="tablist" aria-label="任务筛选">
+            <button type="button" class="filter-button active" data-job-filter="all" role="tab" aria-selected="true">全部</button>
+            <button type="button" class="filter-button" data-job-filter="active" role="tab" aria-selected="false">进行中</button>
+            <button type="button" class="filter-button" data-job-filter="failed" role="tab" aria-selected="false">失败</button>
+          </div>
+
+          <div id="jobList" class="job-list"></div>
+        </aside>
+      </main>
+    </div>
+
+    <dialog class="connection-dialog" id="connectionDialog" aria-labelledby="connectionDialogTitle">
+      <form class="connection-form" id="connectionForm">
+        <header class="dialog-header">
+          <div>
+            <span class="eyebrow">CONNECTION</span>
+            <h2 id="connectionDialogTitle">连接设置</h2>
+          </div>
+          <button class="icon-button" id="closeConnectionSettings" type="button" title="关闭" aria-label="关闭连接设置">
+            <i data-lucide="x"></i>
+          </button>
+        </header>
+
+        <div class="dialog-content">
+          <div class="connection-note">
+            <i data-lucide="shield-check"></i>
+            <div>
+              <strong>仅保存在当前浏览器标签页</strong>
+              <p>关闭标签页后网页 Key 自动清除，不会写入项目文件或任务记录。</p>
+            </div>
+          </div>
+
+          <label class="field">
+            <span class="field-label"><i data-lucide="server"></i>API Base URL</span>
+            <input
+              id="connectionBaseUrlInput"
+              name="baseUrl"
+              type="url"
+              inputmode="url"
+              autocomplete="url"
+              placeholder="https://apinebula.com"
+              required
+            />
+            <small class="field-note">APINebula 或兼容服务的根地址，无需填写接口版本路径</small>
+          </label>
+
+          <label class="field">
+            <span class="field-label"><i data-lucide="key-round"></i>API Key</span>
+            <span class="input-with-action">
+              <input id="connectionApiKeyInput" name="apiKey" type="password" autocomplete="off" placeholder="使用服务端 .env 中的 Key" />
+              <button class="input-action" id="toggleConnectionApiKey" type="button" title="显示 API Key" aria-label="显示 API Key">
+                <i data-lucide="eye"></i>
+              </button>
+            </span>
+            <small class="field-note" id="connectionKeyNote">留空时使用服务端环境配置</small>
+          </label>
+
+          <div class="connection-preview" id="connectionPreview" role="status">
+            <span class="status-dot" aria-hidden="true"></span>
+            <span>
+              <strong>等待设置</strong>
+              <small>填写连接信息后应用</small>
+            </span>
+          </div>
+        </div>
+
+        <footer class="dialog-actions">
+          <button class="text-button" id="resetConnectionSettings" type="button">恢复服务端配置</button>
+          <button class="primary-button" type="submit">
+            <i data-lucide="plug-zap"></i>
+            <span>应用设置</span>
+          </button>
+        </footer>
+      </form>
+    </dialog>
 
     <template id="jobTemplate">
-      <article class="job-card">
-        <div class="job-head">
-          <strong data-field="status"></strong>
-          <span data-field="model"></span>
-        </div>
-        <p data-field="prompt"></p>
-        <div class="meta">
-          <span data-field="taskId"></span>
-          <span data-field="updatedAt"></span>
-        </div>
-      </article>
+      <button class="job-item" type="button">
+        <span class="job-item-top">
+          <span class="job-status-line">
+            <span class="job-status-dot" data-field="statusDot" aria-hidden="true"></span>
+            <strong data-field="status"></strong>
+          </span>
+          <time data-field="updatedAt"></time>
+        </span>
+        <span class="job-model" data-field="model"></span>
+        <span class="job-batch-meta" data-field="batch" hidden></span>
+        <span class="job-prompt" data-field="prompt"></span>
+      </button>
     </template>
 
+    <div class="toast-region" id="toastRegion" aria-live="polite" aria-atomic="true"></div>
+
+    <script src="/vendor/lucide.js"></script>
     <script type="module" src="/app.js"></script>
   </body>
 </html>

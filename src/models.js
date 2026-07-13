@@ -26,7 +26,7 @@ export const MODEL_PRESETS = {
   },
   image2: {
     skill: "nebula-canvas",
-    group: "gpt-image-2-1k",
+    group: "image-2-1k",
     models: ["gpt-image-2"],
     envModel: "NEBULA_CANVAS_IMAGE2_MODEL",
     defaults: {

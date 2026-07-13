@@ -144,9 +144,31 @@ http://127.0.0.1:8787
 
 打开后可以在网页里选择模式：
 
-- 生图：提交异步生图任务。
+- 生图：提交单张或批量异步生图任务。批量模式支持 2–12 张、1–4 个并发任务。
 - 同步改图：上传本地参考图，调用 `POST /v1/images/edits`，默认使用 `response_format=url` 以降低本地内存占用。
 - 异步改图：填写公网参考图 URL，调用 `POST /v1/image-tasks/edits`。
+
+### 网页连接设置
+
+点击页面右上角的服务状态，可以直接设置：
+
+- `API Base URL`：APINebula 或兼容服务的根地址，例如 `https://apinebula.com`。
+- `API Key`：用于当前网页标签页提交的临时令牌。
+
+网页设置优先于服务端 `.env`，会自动用于单张生成、批量生成、同步改图和异步改图。Base URL 作为浏览器偏好保存在本地；API Key 只保存在当前标签页的 `sessionStorage`，关闭标签页后自动清除，不会写入 `.env`、任务 JSON 或批次 `manifest.json`。点击“恢复服务端配置”可以重新使用 `.env`。
+
+批量任务会作为一条记录显示在任务队列中，页面会展示整体进度、成功/失败数量和每张图片的状态。结果默认保存到：
+
+```text
+outputs/batches/<时间戳>-<批次ID>/
+├─ 001.png
+├─ 001.json
+├─ 002.png
+├─ 002.json
+└─ manifest.json
+```
+
+`manifest.json` 会在批次处理过程中持续更新，包含子任务 ID、状态、错误和本地输出路径。
 
 下载后的图片和任务元数据仍然保存在 `NEBULA_CANVAS_OUTPUT_DIR` 指定的目录中。页面里的“临时 API Key”只用于本次本地任务，不会写入 `.env`，也不会在任务 JSON 中回显。
 
@@ -193,6 +215,23 @@ Invoke-RestMethod http://127.0.0.1:8787/api/jobs/<job_id>
 Invoke-RestMethod http://127.0.0.1:8787/api/jobs
 ```
 
+提交批量生成任务：
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8787/api/batches `
+  -Method POST `
+  -ContentType "application/json" `
+  -Body '{
+    "preset": "image2",
+    "prompt": "一张简洁的商业产品图，浅灰背景，真实摄影质感，无水印",
+    "size": "1024x1024",
+    "count": 6,
+    "concurrency": 2
+  }'
+```
+
+批量限制为 `count: 2–12`、`concurrency: 1–4`，且并发数不能超过生成数量。
+
 同步改图需要上传本地图片，适合在浏览器画布里操作；异步改图使用公网图片 URL，也可以直接调用 REST API：
 
 ```powershell
@@ -218,7 +257,7 @@ Invoke-RestMethod http://127.0.0.1:8787/api/edit-jobs `
 | `adobe-nano-banana` | `adobe` |
 | `adobe-nano-banana-pro` | `adobe` |
 | `adobe-nano-banana-2` | `adobe` |
-| `gpt-image-2` | `gpt-image-2-1k` |
+| `gpt-image-2` | `image-2-1k` |
 
 如果令牌分组不匹配，后端可能返回“当前分组下模型无可用渠道”。
 
